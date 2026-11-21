@@ -130,7 +130,7 @@ final class FloatingNotepadPanel: NSPanel {
         applyNeonStyle(enabled: neonGlowEnabled, accent: neonAccent)
     }
 
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { !isGhosted }
     override var canBecomeMain: Bool { false }
 
     override func becomeKey() {
@@ -482,7 +482,7 @@ final class FloatingNotepadPanel: NSPanel {
 
         ghostWakeZoneView.translatesAutoresizingMaskIntoConstraints = false
         ghostWakeZoneView.isHidden = true
-        ghostWakeZoneView.toolTip = "Click to wake Notecast"
+        ghostWakeZoneView.toolTip = "Click to wake · Drag to move"
 
         rootContainer.addSubview(hudEffectView)
         rootContainer.addSubview(contentWrapperView)
@@ -713,6 +713,10 @@ private final class GhostWakeZoneView: NSView {
         trackingArea = area
     }
 
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
     }
@@ -728,7 +732,52 @@ private final class GhostWakeZoneView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onWake?()
+        guard let window else {
+            onWake?()
+            return
+        }
+
+        let startMouse = NSEvent.mouseLocation
+        let startOrigin = window.frame.origin
+        let dragThreshold: CGFloat = 4.0
+        var didDrag = false
+        var completedClick = false
+
+        window.trackEvents(
+            matching: [.leftMouseDragged, .leftMouseUp],
+            timeout: NSEvent.foreverDuration,
+            mode: .eventTracking
+        ) { nextEvent, stop in
+            guard let nextEvent else { return }
+
+            switch nextEvent.type {
+            case .leftMouseDragged:
+                let currentMouse = NSEvent.mouseLocation
+                let dx = currentMouse.x - startMouse.x
+                let dy = currentMouse.y - startMouse.y
+                if !didDrag && hypot(dx, dy) >= dragThreshold {
+                    didDrag = true
+                    NSCursor.closedHand.push()
+                }
+                if didDrag {
+                    window.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy))
+                }
+            case .leftMouseUp:
+                if didDrag {
+                    NSCursor.pop()
+                } else {
+                    let localPoint = self.convert(nextEvent.locationInWindow, from: nil)
+                    completedClick = self.bounds.contains(localPoint)
+                }
+                stop.pointee = true
+            default:
+                break
+            }
+        }
+
+        if completedClick {
+            onWake?()
+        }
     }
 
     func resetHover() {
