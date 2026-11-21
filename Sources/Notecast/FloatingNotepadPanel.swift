@@ -35,7 +35,7 @@ final class FloatingNotepadPanel: NSPanel {
     private let statusLabel = NSTextField(labelWithString: "")
     private let separator = SeparatorGlowView()
     private let neonOverlayView = NeonGlowOverlayView()
-    private let ghostPillHandle = GhostWakePillView()
+    private let ghostWakeZoneView = GhostWakeZoneView()
 
     private let notesListButton: NSButton
     private let searchButton: NSButton
@@ -288,18 +288,19 @@ final class FloatingNotepadPanel: NSPanel {
             rootContainer.layer?.backgroundColor = NSColor.clear.cgColor
             hasShadow = false
             alphaValue = 1.0
-            ghostPillHandle.update(neonGlowEnabled: neonGlowEnabled, accentColor: neonAccent.nsColor)
-            ghostPillHandle.isHidden = false
+            ghostWakeZoneView.update(neonGlowEnabled: neonGlowEnabled, accentColor: neonAccent.nsColor, animated: false)
+            ghostWakeZoneView.isHidden = false
 
             if animated {
+                ghostWakeZoneView.alphaValue = 0.0
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.18
                     contentWrapperView.animator().alphaValue = 0.0
-                    ghostPillHandle.animator().alphaValue = 0.85
+                    ghostWakeZoneView.animator().alphaValue = 1.0
                 }
             } else {
                 contentWrapperView.alphaValue = 0.0
-                ghostPillHandle.alphaValue = 0.85
+                ghostWakeZoneView.alphaValue = 1.0
             }
         } else {
             hudEffectView.isHidden = surfaceStyle.isOpaque
@@ -307,7 +308,8 @@ final class FloatingNotepadPanel: NSPanel {
             alphaValue = surfaceStyle.isOpaque ? 1.0 : CGFloat(panelOpacity)
             hasShadow = true
             invalidateShadow()
-            ghostPillHandle.isHidden = true
+            ghostWakeZoneView.isHidden = true
+            ghostWakeZoneView.resetHover()
 
             if animated {
                 NSAnimationContext.runAnimationGroup { context in
@@ -476,14 +478,14 @@ final class FloatingNotepadPanel: NSPanel {
 
         neonOverlayView.translatesAutoresizingMaskIntoConstraints = false
 
-        ghostPillHandle.translatesAutoresizingMaskIntoConstraints = false
-        ghostPillHandle.isHidden = true
-        ghostPillHandle.toolTip = "Click to wake Notecast"
+        ghostWakeZoneView.translatesAutoresizingMaskIntoConstraints = false
+        ghostWakeZoneView.isHidden = true
+        ghostWakeZoneView.toolTip = "Click to wake Notecast"
 
         rootContainer.addSubview(hudEffectView)
         rootContainer.addSubview(contentWrapperView)
+        rootContainer.addSubview(ghostWakeZoneView)
         rootContainer.addSubview(neonOverlayView)
-        rootContainer.addSubview(ghostPillHandle)
 
         NSLayoutConstraint.activate([
             hudEffectView.topAnchor.constraint(equalTo: rootContainer.topAnchor),
@@ -554,10 +556,10 @@ final class FloatingNotepadPanel: NSPanel {
             neonOverlayView.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
             neonOverlayView.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
 
-            ghostPillHandle.topAnchor.constraint(equalTo: rootContainer.topAnchor, constant: 6),
-            ghostPillHandle.centerXAnchor.constraint(equalTo: rootContainer.centerXAnchor),
-            ghostPillHandle.widthAnchor.constraint(equalToConstant: 38),
-            ghostPillHandle.heightAnchor.constraint(equalToConstant: 5)
+            ghostWakeZoneView.topAnchor.constraint(equalTo: rootContainer.topAnchor),
+            ghostWakeZoneView.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
+            ghostWakeZoneView.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
+            ghostWakeZoneView.widthAnchor.constraint(equalTo: rootContainer.widthAnchor, multiplier: 0.45)
         ])
     }
 
@@ -580,7 +582,7 @@ final class FloatingNotepadPanel: NSPanel {
         hideButton.target = self
         hideButton.action = #selector(handleHideTapped)
 
-        ghostPillHandle.onWake = { [weak self] in
+        ghostWakeZoneView.onWake = { [weak self] in
             self?.onWakeFromGhost?()
         }
     }
@@ -611,7 +613,7 @@ final class FloatingNotepadPanel: NSPanel {
             surfaceStyle: surfaceStyle,
             animated: animated
         )
-        ghostPillHandle.update(neonGlowEnabled: neonGlowEnabled, accentColor: accentColor)
+        ghostWakeZoneView.update(neonGlowEnabled: neonGlowEnabled, accentColor: accentColor, animated: animated)
     }
 
     // MARK: - Button Selectors
@@ -662,17 +664,22 @@ private final class GhostContentWrapperView: NSView {
     }
 }
 
-/// Minimalist top-edge capsule handle visible in Ghost Outline Mode so the user can wake the notepad with a click.
-private final class GhostWakePillView: NSView {
+/// Right-45% dual-tone click-to-wake zone visible in Ghost Outline Mode; the left 55% remains click-through.
+private final class GhostWakeZoneView: NSView {
     var onWake: (() -> Void)?
+
+    private let contrastGradientLayer = CAGradientLayer()
+    private let accentGradientLayer = CAGradientLayer()
+    private let gripPill = NSView()
+    private var trackingArea: NSTrackingArea?
+
+    private var neonGlowEnabled = true
+    private var accentColor = NeonAccent.cyan.nsColor
+    private var isHovered = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 2.5
-        layer?.masksToBounds = false
-        layer?.shadowOffset = .zero
-        layer?.shadowRadius = 4
+        setupView()
     }
 
     @available(*, unavailable)
@@ -680,20 +687,122 @@ private final class GhostWakePillView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(neonGlowEnabled: Bool, accentColor: NSColor) {
-        if neonGlowEnabled {
-            layer?.backgroundColor = accentColor.withAlphaComponent(0.75).cgColor
-            layer?.shadowColor = accentColor.cgColor
-            layer?.shadowOpacity = 0.45
-        } else {
-            layer?.backgroundColor = NSColor.white.withAlphaComponent(0.55).cgColor
-            layer?.shadowColor = NSColor.black.cgColor
-            layer?.shadowOpacity = 0.25
+    override func layout() {
+        super.layout()
+        contrastGradientLayer.frame = bounds
+        accentGradientLayer.frame = bounds
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
         }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        applyAppearance(animated: true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        applyAppearance(animated: true)
     }
 
     override func mouseDown(with event: NSEvent) {
         onWake?()
+    }
+
+    func resetHover() {
+        guard isHovered else { return }
+        isHovered = false
+        applyAppearance(animated: false)
+    }
+
+    func update(neonGlowEnabled: Bool, accentColor: NSColor, animated: Bool) {
+        self.neonGlowEnabled = neonGlowEnabled
+        self.accentColor = accentColor
+        applyAppearance(animated: animated)
+    }
+
+    private func setupView() {
+        wantsLayer = true
+        layer?.masksToBounds = true
+
+        contrastGradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        contrastGradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        contrastGradientLayer.locations = [0.0, 0.5, 1.0]
+        layer?.addSublayer(contrastGradientLayer)
+
+        accentGradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        accentGradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        accentGradientLayer.locations = [0.0, 0.5, 1.0]
+        layer?.addSublayer(accentGradientLayer)
+
+        gripPill.translatesAutoresizingMaskIntoConstraints = false
+        gripPill.wantsLayer = true
+        gripPill.layer?.cornerRadius = 2
+        gripPill.layer?.borderWidth = 0.75
+        gripPill.layer?.borderColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        gripPill.layer?.shadowOffset = .zero
+        gripPill.layer?.shadowRadius = 4
+        addSubview(gripPill)
+
+        NSLayoutConstraint.activate([
+            gripPill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            gripPill.centerYAnchor.constraint(equalTo: centerYAnchor),
+            gripPill.widthAnchor.constraint(equalToConstant: 4),
+            gripPill.heightAnchor.constraint(equalToConstant: 34)
+        ])
+
+        applyAppearance(animated: false)
+    }
+
+    private func applyAppearance(animated: Bool) {
+        let slateBase = NSColor(srgbRed: 0x14 / 255.0, green: 0x19 / 255.0, blue: 0x24 / 255.0, alpha: 1.0)
+        let contrastAlphas: [CGFloat] = isHovered ? [0.09, 0.15, 0.24] : [0.06, 0.11, 0.18]
+        let accentBase = neonGlowEnabled ? accentColor : NSColor.white
+        let accentAlphas: [CGFloat] = isHovered ? [0.05, 0.13, 0.25] : [0.03, 0.09, 0.18]
+
+        let apply = {
+            self.contrastGradientLayer.colors = contrastAlphas.map { slateBase.withAlphaComponent($0).cgColor }
+            self.accentGradientLayer.colors = accentAlphas.map { accentBase.withAlphaComponent($0).cgColor }
+
+            if self.neonGlowEnabled {
+                self.gripPill.layer?.backgroundColor = self.accentColor.withAlphaComponent(self.isHovered ? 0.98 : 0.85).cgColor
+                self.gripPill.layer?.shadowColor = self.accentColor.cgColor
+                self.gripPill.layer?.shadowOpacity = self.isHovered ? 0.65 : 0.45
+            } else {
+                self.gripPill.layer?.backgroundColor = NSColor.white.withAlphaComponent(self.isHovered ? 0.92 : 0.78).cgColor
+                self.gripPill.layer?.shadowColor = NSColor.black.cgColor
+                self.gripPill.layer?.shadowOpacity = 0.3
+            }
+        }
+
+        if animated {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.15)
+            apply()
+            CATransaction.commit()
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            apply()
+            CATransaction.commit()
+        }
     }
 }
 
@@ -767,10 +876,12 @@ private final class SeparatorGlowView: NSView {
     }
 }
 
-/// Non-interactive overlay drawing active neon glow, calm borders, or Ghost Outline reticle arcs.
+/// Non-interactive overlay drawing active neon glow, calm borders, or dual-contrast Ghost Outline reticle arcs.
 private final class NeonGlowOverlayView: NSView {
     private let innerGlowLayer = CAShapeLayer()
+    private let ghostContrastOutlineLayer = CAShapeLayer()
     private let ghostOutlineLayer = CAShapeLayer()
+    private let ghostContrastCornersLayer = CAShapeLayer()
     private let ghostCornersLayer = CAShapeLayer()
 
     override init(frame frameRect: NSRect) {
@@ -785,14 +896,28 @@ private final class NeonGlowOverlayView: NSView {
         innerGlowLayer.shadowRadius = 12
         layer?.addSublayer(innerGlowLayer)
 
+        ghostContrastOutlineLayer.fillColor = nil
+        ghostContrastOutlineLayer.lineWidth = 2.5
+        ghostContrastOutlineLayer.lineDashPattern = [5, 4]
+        ghostContrastOutlineLayer.strokeColor = NSColor.black.withAlphaComponent(0.38).cgColor
+        ghostContrastOutlineLayer.opacity = 0
+        layer?.addSublayer(ghostContrastOutlineLayer)
+
         ghostOutlineLayer.fillColor = nil
-        ghostOutlineLayer.lineWidth = 1.0
+        ghostOutlineLayer.lineWidth = 1.25
         ghostOutlineLayer.lineDashPattern = [5, 4]
         ghostOutlineLayer.opacity = 0
         layer?.addSublayer(ghostOutlineLayer)
 
+        ghostContrastCornersLayer.fillColor = nil
+        ghostContrastCornersLayer.lineWidth = 3.75
+        ghostContrastCornersLayer.lineCap = .round
+        ghostContrastCornersLayer.strokeColor = NSColor.black.withAlphaComponent(0.45).cgColor
+        ghostContrastCornersLayer.opacity = 0
+        layer?.addSublayer(ghostContrastCornersLayer)
+
         ghostCornersLayer.fillColor = nil
-        ghostCornersLayer.lineWidth = 1.75
+        ghostCornersLayer.lineWidth = 2.0
         ghostCornersLayer.lineCap = .round
         ghostCornersLayer.shadowOffset = .zero
         ghostCornersLayer.shadowRadius = 4
@@ -829,21 +954,27 @@ private final class NeonGlowOverlayView: NSView {
                 self.layer?.borderWidth = 0
                 self.innerGlowLayer.shadowOpacity = 0.0
 
+                self.ghostContrastOutlineLayer.opacity = 1.0
+
                 self.ghostOutlineLayer.strokeColor = neonGlowEnabled
-                    ? accentColor.withAlphaComponent(0.42).cgColor
-                    : surfaceStyle.calmBorderColor.withAlphaComponent(0.7).cgColor
+                    ? accentColor.withAlphaComponent(0.78).cgColor
+                    : NSColor.white.withAlphaComponent(0.80).cgColor
                 self.ghostOutlineLayer.opacity = 1.0
 
+                self.ghostContrastCornersLayer.opacity = 1.0
+
                 self.ghostCornersLayer.strokeColor = neonGlowEnabled
-                    ? accentColor.withAlphaComponent(0.85).cgColor
-                    : NSColor.white.withAlphaComponent(0.65).cgColor
+                    ? accentColor.withAlphaComponent(0.95).cgColor
+                    : NSColor.white.withAlphaComponent(0.90).cgColor
                 self.ghostCornersLayer.shadowColor = neonGlowEnabled
                     ? accentColor.cgColor
                     : NSColor.black.cgColor
-                self.ghostCornersLayer.shadowOpacity = neonGlowEnabled ? 0.5 : 0.25
+                self.ghostCornersLayer.shadowOpacity = neonGlowEnabled ? 0.55 : 0.25
                 self.ghostCornersLayer.opacity = 1.0
             } else {
+                self.ghostContrastOutlineLayer.opacity = 0.0
                 self.ghostOutlineLayer.opacity = 0.0
+                self.ghostContrastCornersLayer.opacity = 0.0
                 self.ghostCornersLayer.opacity = 0.0
 
                 if isActive && neonGlowEnabled {
@@ -876,7 +1007,9 @@ private final class NeonGlowOverlayView: NSView {
     private func updatePaths() {
         guard !bounds.isEmpty else { return }
         innerGlowLayer.frame = bounds
+        ghostContrastOutlineLayer.frame = bounds
         ghostOutlineLayer.frame = bounds
+        ghostContrastCornersLayer.frame = bounds
         ghostCornersLayer.frame = bounds
 
         let outerRect = bounds.insetBy(dx: -24, dy: -24)
@@ -887,7 +1020,9 @@ private final class NeonGlowOverlayView: NSView {
 
         let outlineRect = bounds.insetBy(dx: 0.75, dy: 0.75)
         let outlineRadius = max(2, panelCornerRadius - 0.75)
-        ghostOutlineLayer.path = CGPath(roundedRect: outlineRect, cornerWidth: outlineRadius, cornerHeight: outlineRadius, transform: nil)
+        let outlineCGPath = CGPath(roundedRect: outlineRect, cornerWidth: outlineRadius, cornerHeight: outlineRadius, transform: nil)
+        ghostContrastOutlineLayer.path = outlineCGPath
+        ghostOutlineLayer.path = outlineCGPath
 
         let r = bounds.insetBy(dx: 1.0, dy: 1.0)
         let cr = max(2, panelCornerRadius - 1.0)
@@ -918,6 +1053,7 @@ private final class NeonGlowOverlayView: NSView {
         cornersPath.addArc(tangent1End: CGPoint(x: r.minX, y: r.maxY), tangent2End: CGPoint(x: r.minX, y: r.maxY - cr), radius: cr)
         cornersPath.addLine(to: CGPoint(x: r.minX, y: r.maxY - cr - arm))
 
+        ghostContrastCornersLayer.path = cornersPath
         ghostCornersLayer.path = cornersPath
     }
 }

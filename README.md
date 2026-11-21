@@ -17,7 +17,7 @@ xattr -cr /Applications/Notecast.app
 
 - **Instant Global Hotkey** (`⌥⌘N` by default, configurable in Settings) — always opens back into the note view on the last note you were working on
 - **12 Background Themes & Active Neon Glow**: choose directly from a visual color swatch palette in Settings — **Charcoal** (default), **Graphite**, **Pure Black**, **Midnight Slate**, **Deep Indigo**, **Nordic Blue**, **Warm Espresso**, **Deep Forest**, **Plum Noir**, **Warm Paper**, **Cool Mist**, or **Translucent HUD**, paired with a luminous neon edge glow when focused (Cyan, Violet, Magenta, Emerald, or Amber)
-- **Ghost Outline Mode (Optional)**: turn completely transparent when unfocused — hiding all text and background while keeping a crisp neon reticle outline and top wake pill so windows underneath are 100% readable and clickable
+- **Ghost Outline Mode (Optional)**: turn transparent when unfocused — hiding all text while keeping a high-contrast dual-tone reticle outline (visible on both light and dark backgrounds), a fully click-through left 55%, and a subtly shaded click-to-wake right 45% zone
 - **Always-On-Top Floating Panel**: stays above other apps and full-screen Spaces while windows underneath remain interactable
 - **Multi-Note Library & Built-In Search / Command Palette**:
   - `⌘P` opens the Raycast-style search & command palette (search notes or type `>` for commands)
