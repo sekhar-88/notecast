@@ -21,6 +21,7 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
 
     var onOpenSettings: (() -> Void)?
     var onDismissToEditor: (() -> Void)?
+    var onDidClose: (() -> Void)?
 
     private(set) var currentMode: Mode
     private var lastAvoidingPanelFrame: NSRect?
@@ -611,6 +612,10 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
 
     override func loadWindow() {
         // Window is created directly in init(mode:).
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onDidClose?()
     }
 
     // MARK: - Actions

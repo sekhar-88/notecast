@@ -862,12 +862,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             controller.onRevealNotesFolder = { [weak self] in
                 self?.revealNotesFolderInFinder()
             }
+            controller.onDidClose = { [weak self] in
+                self?.panel.setSettingsActive(false)
+            }
             settingsController = controller
         }
 
         if panel.isVisible && panel.isGhosted {
             panel.setGhosted(false, animated: true)
         }
+        panel.setSettingsActive(true)
         settingsController?.showAndFocus(avoiding: panel.isVisible ? panel.frame : nil)
     }
 
@@ -888,12 +892,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     self.panel.dismissOverlaysAndFocusEditor()
                 }
             }
+            controller.onDidClose = { [weak self] in
+                self?.panel.setGuideActive(false)
+            }
             guideController = controller
         }
 
         if panel.isVisible && panel.isGhosted {
             panel.setGhosted(false, animated: true)
         }
+        panel.setGuideActive(true)
         guideController?.show(mode: mode, avoiding: panel.isVisible ? panel.frame : nil)
     }
 }

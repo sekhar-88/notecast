@@ -19,6 +19,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     var onGhostOnUnfocusChanged: ((Bool) -> Void)?
     var onGhostWakeZoneFractionChanged: ((Double, Bool) -> Void)?
     var onRevealNotesFolder: (() -> Void)?
+    var onDidClose: (() -> Void)?
 
     private let settings: AppSettings
     private let notesDirectoryURL: URL
@@ -144,6 +145,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         hotKeyRecorder.cancelRecordingIfNeeded()
         hotKeyStatusLabel.stringValue = ""
         onGhostWakeZoneFractionChanged?(settings.ghostWakeZoneFraction, false)
+        onDidClose?()
     }
 
     // MARK: - Layout

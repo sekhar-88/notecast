@@ -40,13 +40,13 @@ final class FloatingNotepadPanel: NSPanel {
     private let neonOverlayView = NeonGlowOverlayView()
     private let ghostWakeZoneView = GhostWakeZoneView()
 
-    private let notesListButton: NSButton
-    private let searchButton: NSButton
-    private let newNoteButton: NSButton
-    private let pinButton: NSButton
-    private let helpButton: NSButton
-    private let settingsButton: NSButton
-    private let hideButton: NSButton
+    private let notesListButton: HeaderIconButton
+    private let searchButton: HeaderIconButton
+    private let newNoteButton: HeaderIconButton
+    private let pinButton: HeaderIconButton
+    private let helpButton: HeaderIconButton
+    private let settingsButton: HeaderIconButton
+    private let hideButton: HeaderIconButton
 
     private var surfaceStyle: SurfaceStyle
     private var panelOpacity: Double
@@ -119,11 +119,18 @@ final class FloatingNotepadPanel: NSPanel {
         self.searchButton = Self.makeHeaderButton(symbolName: "magnifyingglass", accessibilityLabel: "Search & Commands")
         self.newNoteButton = Self.makeHeaderButton(symbolName: "square.and.pencil", accessibilityLabel: "New Note")
         self.pinButton = Self.makeHeaderButton(symbolName: "pin.fill", accessibilityLabel: "Toggle Always on Top")
-        self.helpButton = Self.makeHeaderButton(symbolName: "questionmark.circle.fill", accessibilityLabel: "Instructions & Shortcuts")
-        self.helpButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
-        self.helpButton.contentTintColor = NSColor(srgbRed: 0.72, green: 0.36, blue: 1.0, alpha: 0.95)
+        self.helpButton = Self.makeHeaderButton(
+            symbolName: "questionmark.circle.fill",
+            accessibilityLabel: "Instructions & Shortcuts",
+            pointSize: 12.5,
+            weight: .semibold
+        )
+        self.helpButton.restTintColor = NSColor(srgbRed: 0.72, green: 0.36, blue: 1.0, alpha: 0.92)
+        self.helpButton.hoverTintOverride = NSColor(srgbRed: 0.78, green: 0.44, blue: 1.0, alpha: 1.0)
+        self.helpButton.activeAccentColor = NeonAccent.violet.nsColor
         self.settingsButton = Self.makeHeaderButton(symbolName: "gearshape", accessibilityLabel: "Settings")
         self.hideButton = Self.makeHeaderButton(symbolName: "xmark", accessibilityLabel: "Hide Notecast")
+        self.hideButton.hoverTintOverride = NSColor(srgbRed: 1.0, green: 0.38, blue: 0.42, alpha: 0.95)
 
         super.init(
             contentRect: contentRect,
@@ -330,6 +337,9 @@ final class FloatingNotepadPanel: NSPanel {
         contentWrapperView.isGhosted = ghosted
 
         if ghosted {
+            for button in headerButtons {
+                button.resetHover()
+            }
             onShouldEnsureWakeZoneOnScreen?()
             hudEffectView.isHidden = true
             rootContainer.layer?.backgroundColor = NSColor.clear.cgColor
@@ -390,11 +400,13 @@ final class FloatingNotepadPanel: NSPanel {
             neonAccent: neonAccent
         )
         notesListView.isHidden = false
+        syncHeaderOverlayStates()
         notesListView.focusList()
     }
 
     func hideNotesList() {
         notesListView.isHidden = true
+        syncHeaderOverlayStates()
         if commandPaletteView.isHidden {
             makeFirstResponder(textView)
         }
@@ -403,6 +415,7 @@ final class FloatingNotepadPanel: NSPanel {
     func showCommandPalette(mode: PaletteMode) {
         activePaletteMode = mode
         commandPaletteView.isHidden = false
+        syncHeaderOverlayStates()
         commandPaletteView.openPalette(
             mode: mode,
             surfaceStyle: surfaceStyle,
@@ -413,6 +426,7 @@ final class FloatingNotepadPanel: NSPanel {
 
     func hideCommandPalette() {
         commandPaletteView.isHidden = true
+        syncHeaderOverlayStates()
         if isNotesListVisible {
             notesListView.focusList()
         } else {
@@ -423,7 +437,16 @@ final class FloatingNotepadPanel: NSPanel {
     func dismissOverlaysAndFocusEditor() {
         commandPaletteView.isHidden = true
         notesListView.isHidden = true
+        syncHeaderOverlayStates()
         makeFirstResponder(textView)
+    }
+
+    func setGuideActive(_ active: Bool) {
+        helpButton.isActiveState = active
+    }
+
+    func setSettingsActive(_ active: Bool) {
+        settingsButton.isActiveState = active
     }
 
     // MARK: - Setup
@@ -575,20 +598,20 @@ final class FloatingNotepadPanel: NSPanel {
             rightStack.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -8),
             rightStack.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
 
-            notesListButton.widthAnchor.constraint(equalToConstant: 22),
-            notesListButton.heightAnchor.constraint(equalToConstant: 22),
-            searchButton.widthAnchor.constraint(equalToConstant: 22),
-            searchButton.heightAnchor.constraint(equalToConstant: 22),
-            newNoteButton.widthAnchor.constraint(equalToConstant: 22),
-            newNoteButton.heightAnchor.constraint(equalToConstant: 22),
-            pinButton.widthAnchor.constraint(equalToConstant: 22),
-            pinButton.heightAnchor.constraint(equalToConstant: 22),
-            helpButton.widthAnchor.constraint(equalToConstant: 22),
-            helpButton.heightAnchor.constraint(equalToConstant: 22),
-            settingsButton.widthAnchor.constraint(equalToConstant: 22),
-            settingsButton.heightAnchor.constraint(equalToConstant: 22),
-            hideButton.widthAnchor.constraint(equalToConstant: 22),
-            hideButton.heightAnchor.constraint(equalToConstant: 22),
+            notesListButton.widthAnchor.constraint(equalToConstant: 24),
+            notesListButton.heightAnchor.constraint(equalToConstant: 24),
+            searchButton.widthAnchor.constraint(equalToConstant: 24),
+            searchButton.heightAnchor.constraint(equalToConstant: 24),
+            newNoteButton.widthAnchor.constraint(equalToConstant: 24),
+            newNoteButton.heightAnchor.constraint(equalToConstant: 24),
+            pinButton.widthAnchor.constraint(equalToConstant: 24),
+            pinButton.heightAnchor.constraint(equalToConstant: 24),
+            helpButton.widthAnchor.constraint(equalToConstant: 24),
+            helpButton.heightAnchor.constraint(equalToConstant: 24),
+            settingsButton.widthAnchor.constraint(equalToConstant: 24),
+            settingsButton.heightAnchor.constraint(equalToConstant: 24),
+            hideButton.widthAnchor.constraint(equalToConstant: 24),
+            hideButton.heightAnchor.constraint(equalToConstant: 24),
 
             separator.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             separator.leadingAnchor.constraint(equalTo: contentWrapperView.leadingAnchor),
@@ -652,18 +675,37 @@ final class FloatingNotepadPanel: NSPanel {
         }
     }
 
-    private func updatePinTint() {
-        if isAlwaysOnTop {
-            pinButton.contentTintColor = neonGlowEnabled ? neonAccent.nsColor : .controlAccentColor
-        } else {
-            pinButton.contentTintColor = .secondaryLabelColor
+    private var headerButtons: [HeaderIconButton] {
+        [notesListButton, searchButton, newNoteButton, pinButton, helpButton, settingsButton, hideButton]
+    }
+
+    private func syncHeaderOverlayStates() {
+        notesListButton.isActiveState = isNotesListVisible
+        searchButton.isActiveState = isCommandPaletteVisible
+    }
+
+    private func refreshHeaderButtonsTheme() {
+        let accent: NSColor = neonGlowEnabled ? neonAccent.nsColor : .controlAccentColor
+        let isLight = surfaceStyle.isLight
+        for button in headerButtons {
+            button.isLightSurface = isLight
+            if button !== helpButton {
+                button.activeAccentColor = accent
+            }
         }
+        pinButton.isActiveState = isAlwaysOnTop
+        syncHeaderOverlayStates()
+    }
+
+    private func updatePinTint() {
+        refreshHeaderButtonsTheme()
     }
 
     private func refreshActiveNeonVisuals(animated: Bool) {
         let glowActive = isPanelActive && neonGlowEnabled
         let accentColor = neonAccent.nsColor
 
+        refreshHeaderButtonsTheme()
         iconView.image = NotecastBrandIcon.headerIconImage(
             accentColor: glowActive ? accentColor : nil,
             isActive: isPanelActive
@@ -714,16 +756,201 @@ final class FloatingNotepadPanel: NSPanel {
         onRequestHide?()
     }
 
-    private static func makeHeaderButton(symbolName: String, accessibilityLabel: String) -> NSButton {
-        let button = NSButton()
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
+    private static func makeHeaderButton(
+        symbolName: String,
+        accessibilityLabel: String,
+        pointSize: CGFloat = 11.5,
+        weight: NSFont.Weight = .medium
+    ) -> HeaderIconButton {
+        let button = HeaderIconButton()
         button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)
-        button.imageScaling = .scaleProportionallyDown
-        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .medium)
-        button.contentTintColor = .secondaryLabelColor
+        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
         return button
+    }
+}
+
+/// Title bar icon button with rounded hover pill, pressed state, and bottom active indicator bar.
+private final class HeaderIconButton: NSButton {
+    var isActiveState = false {
+        didSet {
+            if isActiveState != oldValue {
+                updateVisualState(animated: true)
+            }
+        }
+    }
+
+    var restTintColor: NSColor? {
+        didSet { updateVisualState(animated: false) }
+    }
+
+    var hoverTintOverride: NSColor? {
+        didSet { updateVisualState(animated: false) }
+    }
+
+    var activeAccentColor: NSColor = .controlAccentColor {
+        didSet { updateVisualState(animated: false) }
+    }
+
+    var isLightSurface = false {
+        didSet { updateVisualState(animated: false) }
+    }
+
+    private let activeIndicatorLayer = CALayer()
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        translatesAutoresizingMaskIntoConstraints = false
+        isBordered = false
+        bezelStyle = .regularSquare
+        imageScaling = .scaleProportionallyDown
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+
+        activeIndicatorLayer.cornerRadius = 1
+        activeIndicatorLayer.opacity = 0
+        layer?.addSublayer(activeIndicatorLayer)
+        updateVisualState(animated: false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var isHighlighted: Bool {
+        didSet {
+            if isHighlighted != oldValue {
+                updateVisualState(animated: false)
+            }
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        let y: CGFloat = isFlipped ? (bounds.height - 3.5) : 1.5
+        activeIndicatorLayer.frame = CGRect(
+            x: floor((bounds.width - 10) * 0.5),
+            y: y,
+            width: 10,
+            height: 2
+        )
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateVisualState(animated: false)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        updateVisualState(animated: true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        updateVisualState(animated: true)
+    }
+
+    func resetHover() {
+        guard isHovered else { return }
+        isHovered = false
+        updateVisualState(animated: false)
+    }
+
+    private func updateVisualState(animated: Bool) {
+        let bgColor: NSColor
+        let borderColor: NSColor
+        let borderWidth: CGFloat
+        let tintColor: NSColor
+        let indicatorOpacity: Float
+
+        if isHighlighted {
+            if isActiveState {
+                bgColor = activeAccentColor.withAlphaComponent(0.30)
+                borderColor = activeAccentColor.withAlphaComponent(0.60)
+                borderWidth = 1.0
+                tintColor = hoverTintOverride ?? activeAccentColor
+                indicatorOpacity = 1.0
+            } else if let override = hoverTintOverride {
+                bgColor = override.withAlphaComponent(0.26)
+                borderColor = .clear
+                borderWidth = 0
+                tintColor = override
+                indicatorOpacity = 0.0
+            } else {
+                bgColor = isLightSurface ? NSColor.black.withAlphaComponent(0.14) : NSColor.white.withAlphaComponent(0.20)
+                borderColor = .clear
+                borderWidth = 0
+                tintColor = .labelColor
+                indicatorOpacity = 0.0
+            }
+        } else if isActiveState {
+            bgColor = activeAccentColor.withAlphaComponent(isHovered ? 0.24 : (isLightSurface ? 0.14 : 0.18))
+            borderColor = activeAccentColor.withAlphaComponent(isHovered ? 0.55 : 0.38)
+            borderWidth = 1.0
+            tintColor = activeAccentColor
+            indicatorOpacity = 1.0
+        } else if isHovered {
+            if let override = hoverTintOverride {
+                bgColor = override.withAlphaComponent(isLightSurface ? 0.14 : 0.18)
+                tintColor = override
+            } else {
+                bgColor = isLightSurface ? NSColor.black.withAlphaComponent(0.08) : NSColor.white.withAlphaComponent(0.12)
+                tintColor = .labelColor
+            }
+            borderColor = .clear
+            borderWidth = 0
+            indicatorOpacity = 0.0
+        } else {
+            bgColor = .clear
+            borderColor = .clear
+            borderWidth = 0
+            tintColor = restTintColor ?? .secondaryLabelColor
+            indicatorOpacity = 0.0
+        }
+
+        let apply = {
+            self.layer?.backgroundColor = bgColor.cgColor
+            self.layer?.borderColor = borderColor.cgColor
+            self.layer?.borderWidth = borderWidth
+            self.activeIndicatorLayer.backgroundColor = self.activeAccentColor.cgColor
+            self.activeIndicatorLayer.opacity = indicatorOpacity
+            self.contentTintColor = tintColor
+        }
+
+        if animated {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.12)
+            apply()
+            CATransaction.commit()
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            apply()
+            CATransaction.commit()
+        }
     }
 }
 
