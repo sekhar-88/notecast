@@ -610,4 +610,21 @@ struct AppSettingsAndStylerTests {
         let fallback = MarkdownStyler.resolveFont(family: "DefinitelyNonExistentFontXYZ_123", size: 14)
         #expect(fallback.pointSize == 14)
     }
+
+    @Test("NotecastBrandIcon renders valid lossless PNG and menu/header icons")
+    func brandIconRendering() {
+        let pngData = NotecastBrandIcon.renderPNGData(pixelSize: 64)
+        #expect(pngData != nil)
+        if let bytes = pngData {
+            #expect(Array(bytes.prefix(4)) == [0x89, 0x50, 0x4E, 0x47])
+        }
+
+        let menuImage = NotecastBrandIcon.menuBarImage()
+        #expect(menuImage.size == NSSize(width: 18, height: 18))
+        #expect(menuImage.isTemplate == true)
+
+        let headerImage = NotecastBrandIcon.headerIconImage(accentColor: NeonAccent.violet.nsColor, isActive: true)
+        #expect(headerImage.size == NSSize(width: 18, height: 18))
+        #expect(headerImage.isTemplate == false)
+    }
 }

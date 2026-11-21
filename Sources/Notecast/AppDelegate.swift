@@ -216,8 +216,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Notecast")
-            button.image?.isTemplate = true
+            let icon = NotecastBrandIcon.menuBarImage()
+            icon.accessibilityDescription = "Notecast"
+            icon.isTemplate = true
+            button.image = icon
             button.toolTip = "Notecast (\(settings.hotKey.displayString))"
         }
 

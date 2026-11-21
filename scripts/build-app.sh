@@ -45,35 +45,25 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
-ICON_SRC="$ROOT_DIR/Assets/AppIcon.png"
-if [[ ! -f "$ICON_SRC" ]]; then
-    echo "Error: expected app icon asset at $ICON_SRC" >&2
+ICON_RENDERER_SRC="$ROOT_DIR/Sources/NotecastCore/NotecastBrandIcon.swift"
+if [[ ! -f "$ICON_RENDERER_SRC" ]]; then
+    echo "Error: expected vector icon renderer at $ICON_RENDERER_SRC" >&2
     exit 1
 fi
 
 ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/notecast-icon.XXXXXX")"
-ICON_GEN_SRC="$ICON_TMP/gen_icon.swift"
+ICON_GEN_MAIN="$ICON_TMP/main.swift"
 ICON_GEN_BIN="$ICON_TMP/gen_icon"
 
-cat > "$ICON_GEN_SRC" << 'SWIFT'
-import AppKit
-import ImageIO
+cat > "$ICON_GEN_MAIN" << 'SWIFT'
+import Foundation
 
-guard CommandLine.arguments.count >= 3 else {
-    fputs("Usage: gen_icon <source.png> <output.icns>\n", stderr)
+guard CommandLine.arguments.count >= 2 else {
+    fputs("Usage: gen_icon <output.icns>\n", stderr)
     exit(1)
 }
 
-let inFile = URL(fileURLWithPath: CommandLine.arguments[1])
-let outFile = URL(fileURLWithPath: CommandLine.arguments[2])
-
-guard let imageSource = CGImageSourceCreateWithURL(inFile as CFURL, nil),
-      let sourceCGImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
-    fputs("Error: failed to load source PNG at \(inFile.path)\n", stderr)
-    exit(1)
-}
-
-let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+let outFile = URL(fileURLWithPath: CommandLine.arguments[1])
 let entries: [(String, Int)] = [
     ("icp4", 16),
     ("ic11", 32),
@@ -90,26 +80,8 @@ let entries: [(String, Int)] = [
 var body = Data()
 
 for (chunkType, px) in entries {
-    guard let ctx = CGContext(
-        data: nil,
-        width: px,
-        height: px,
-        bitsPerComponent: 8,
-        bytesPerRow: 0,
-        space: colorSpace,
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else {
-        fputs("Error: failed to allocate \(px)x\(px) CGContext\n", stderr)
-        exit(1)
-    }
-
-    ctx.interpolationQuality = .high
-    ctx.clear(CGRect(x: 0, y: 0, width: px, height: px))
-    ctx.draw(sourceCGImage, in: CGRect(x: 0, y: 0, width: px, height: px))
-
-    guard let scaledImage = ctx.makeImage(),
-          let pngData = NSBitmapImageRep(cgImage: scaledImage).representation(using: .png, properties: [:]) else {
-        fputs("Error: failed to encode \(px)x\(px) PNG chunk\n", stderr)
+    guard let pngData = NotecastBrandIcon.renderPNGData(pixelSize: px, includeOuterMargin: true) else {
+        fputs("Error: failed to render \(px)x\(px) PNG chunk\n", stderr)
         exit(1)
     }
 
@@ -128,15 +100,15 @@ icns.append(body)
 try icns.write(to: outFile, options: [.atomic])
 SWIFT
 
-if ! swiftc "$ICON_GEN_SRC" -o "$ICON_GEN_BIN" -framework AppKit -framework ImageIO; then
+if ! swiftc "$ICON_RENDERER_SRC" "$ICON_GEN_MAIN" -o "$ICON_GEN_BIN" -framework AppKit; then
     rm -rf "$ICON_TMP"
-    echo "Error: failed to compile icon generator" >&2
+    echo "Error: failed to compile vector icon generator" >&2
     exit 1
 fi
 
-if ! "$ICON_GEN_BIN" "$ICON_SRC" "$RESOURCES_DIR/AppIcon.icns"; then
+if ! "$ICON_GEN_BIN" "$RESOURCES_DIR/AppIcon.icns"; then
     rm -rf "$ICON_TMP"
-    echo "Error: failed to generate AppIcon.icns from $ICON_SRC" >&2
+    echo "Error: failed to generate AppIcon.icns" >&2
     exit 1
 fi
 rm -rf "$ICON_TMP"
@@ -174,6 +146,7 @@ PLIST
 
 echo "Signing $APP_BUNDLE..."
 codesign --force --deep --sign - "$APP_BUNDLE"
+touch "$APP_BUNDLE"
 
 if [[ "$INSTALL_TO_APPLICATIONS" == true ]]; then
     DEST="/Applications/$APP_NAME.app"

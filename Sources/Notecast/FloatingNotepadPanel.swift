@@ -416,9 +416,11 @@ final class FloatingNotepadPanel: NSPanel {
         headerView.wantsLayer = true
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: nil)
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-        iconView.contentTintColor = .secondaryLabelColor
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.image = NotecastBrandIcon.headerIconImage(
+            accentColor: neonGlowEnabled ? neonAccent.nsColor : nil,
+            isActive: isPanelActive
+        )
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
@@ -503,10 +505,10 @@ final class FloatingNotepadPanel: NSPanel {
             headerView.trailingAnchor.constraint(equalTo: contentWrapperView.trailingAnchor),
             headerView.heightAnchor.constraint(equalToConstant: 36),
 
-            iconView.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 12),
+            iconView.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 11),
             iconView.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 14),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
+            iconView.widthAnchor.constraint(equalToConstant: 18),
+            iconView.heightAnchor.constraint(equalToConstant: 18),
 
             titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 6),
             titleLabel.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
@@ -599,7 +601,10 @@ final class FloatingNotepadPanel: NSPanel {
         let glowActive = isPanelActive && neonGlowEnabled
         let accentColor = neonAccent.nsColor
 
-        iconView.contentTintColor = glowActive ? accentColor : .secondaryLabelColor
+        iconView.image = NotecastBrandIcon.headerIconImage(
+            accentColor: glowActive ? accentColor : nil,
+            isActive: isPanelActive
+        )
         separator.update(
             glowActive: glowActive,
             accentColor: accentColor,
