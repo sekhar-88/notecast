@@ -361,7 +361,7 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
         stack.alignment = .leading
         stack.spacing = 10
 
-        stack.addArrangedSubview(makeShortcutSection(
+        let shortcutsSection = makeShortcutSection(
             heading: "Shortcuts",
             rows: [
                 ("⌥⌘N", "Toggle Notecast globally (any app or Space)"),
@@ -371,22 +371,24 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
                 ("⌘N / ⌘L", "Create new note / Toggle Notes List"),
                 ("⌘+ / ⌘− / ⌘0", "Zoom editor text size or reset to 14 pt"),
                 ("⌘? / Esc", "Open this guide / Dismiss overlay or palette")
-            ],
-            parentStack: stack
-        ))
+            ]
+        )
+        stack.addArrangedSubview(shortcutsSection)
+        shortcutsSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        stack.addArrangedSubview(makeBulletSection(
+        let markdownSection = makeBulletSection(
             heading: "Markdown & Smart Editing",
             items: [
                 "# Headings (# to ####), > quotes, and ``` fenced blocks style live as you type.",
                 "Inline formatting: **bold** (⌘B), *italic* (⌘I), `code` (⌘E), and ~~strikethrough~~ (⌘⇧X).",
                 "Checklists & lists: ⌘⇧L or ⌘↩ toggles tasks, clicking [ ] flips checkboxes, Enter continues or exits lists, and Tab / ⇧Tab indents or outdents.",
                 "Paste (⌘V) always strips rich formatting to keep scratchpad notes clean plain text."
-            ],
-            parentStack: stack
-        ))
+            ]
+        )
+        stack.addArrangedSubview(markdownSection)
+        markdownSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        stack.addArrangedSubview(makeBulletSection(
+        let ghostSection = makeBulletSection(
             heading: "Ghost Outline Mode & Drag Handle",
             items: [
                 "Enable \"Transparent outline when unfocused\" in Settings (⌘,).",
@@ -394,19 +396,21 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
                 "Normal click the right handle area to wake Notecast and resume typing.",
                 "Hold & drag the right handle area to reposition the ghosted outline without waking the notes.",
                 "Adjust Ghost Wake Area (15%–100%) in Settings; if dragged near a screen edge, Notecast auto-adjusts so the handle never gets stuck off-screen."
-            ],
-            parentStack: stack
-        ))
+            ]
+        )
+        stack.addArrangedSubview(ghostSection)
+        ghostSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        stack.addArrangedSubview(makeBulletSection(
+        let storageSection = makeBulletSection(
             heading: "Appearance & Local Storage",
             items: [
                 "Choose from 12 visual background themes (dark charcoal/slate, light paper/mist, or frosted HUD) directly in Settings.",
                 "Pick from 5 active neon border accents and preview installed fonts live with ↑ / ↓ arrow keys.",
                 "Notes save automatically and atomically as Markdown files in ~/Library/Application Support/Notecast/notes/."
-            ],
-            parentStack: stack
-        ))
+            ]
+        )
+        stack.addArrangedSubview(storageSection)
+        storageSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         documentView.addSubview(stack)
         scrollView.documentView = documentView
@@ -420,7 +424,6 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
 
             documentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            documentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
 
             stack.topAnchor.constraint(equalTo: documentView.topAnchor),
@@ -434,8 +437,7 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
 
     private func makeShortcutSection(
         heading: String,
-        rows: [(keys: String, desc: String)],
-        parentStack: NSStackView
+        rows: [(keys: String, desc: String)]
     ) -> NSView {
         let card = makeFrostedCard()
         let inner = NSStackView()
@@ -468,16 +470,14 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
             inner.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
             inner.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
             inner.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-            inner.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
-            card.widthAnchor.constraint(equalTo: parentStack.widthAnchor)
+            inner.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10)
         ])
         return card
     }
 
     private func makeBulletSection(
         heading: String,
-        items: [String],
-        parentStack: NSStackView
+        items: [String]
     ) -> NSView {
         let card = makeFrostedCard()
         let inner = NSStackView()
@@ -514,8 +514,7 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
             inner.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
             inner.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
             inner.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
-            inner.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
-            card.widthAnchor.constraint(equalTo: parentStack.widthAnchor)
+            inner.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10)
         ])
         return card
     }

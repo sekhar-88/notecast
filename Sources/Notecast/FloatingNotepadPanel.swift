@@ -686,9 +686,7 @@ final class FloatingNotepadPanel: NSPanel {
 
     private func refreshHeaderButtonsTheme() {
         let accent: NSColor = neonGlowEnabled ? neonAccent.nsColor : .controlAccentColor
-        let isLight = surfaceStyle.isLight
         for button in headerButtons {
-            button.isLightSurface = isLight
             if button !== helpButton {
                 button.activeAccentColor = accent
             }
@@ -769,7 +767,7 @@ final class FloatingNotepadPanel: NSPanel {
     }
 }
 
-/// Title bar icon button with rounded hover pill, pressed state, and bottom active indicator bar.
+/// Title bar icon button with borderless hover tint, tactile press fade, and bottom active underline indicator.
 private final class HeaderIconButton: NSButton {
     var isActiveState = false {
         didSet {
@@ -791,10 +789,6 @@ private final class HeaderIconButton: NSButton {
         didSet { updateVisualState(animated: false) }
     }
 
-    var isLightSurface = false {
-        didSet { updateVisualState(animated: false) }
-    }
-
     private let activeIndicatorLayer = CALayer()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false
@@ -803,11 +797,15 @@ private final class HeaderIconButton: NSButton {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         isBordered = false
+        showsBorderOnlyWhileMouseInside = false
+        focusRingType = .none
         bezelStyle = .regularSquare
         imageScaling = .scaleProportionallyDown
+        (cell as? NSButtonCell)?.highlightsBy = []
         wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.cornerCurve = .continuous
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
 
         activeIndicatorLayer.cornerRadius = 1
         activeIndicatorLayer.opacity = 0
@@ -880,64 +878,36 @@ private final class HeaderIconButton: NSButton {
     }
 
     private func updateVisualState(animated: Bool) {
-        let bgColor: NSColor
-        let borderColor: NSColor
-        let borderWidth: CGFloat
         let tintColor: NSColor
+        let targetAlpha: CGFloat
         let indicatorOpacity: Float
 
         if isHighlighted {
-            if isActiveState {
-                bgColor = activeAccentColor.withAlphaComponent(0.30)
-                borderColor = activeAccentColor.withAlphaComponent(0.60)
-                borderWidth = 1.0
-                tintColor = hoverTintOverride ?? activeAccentColor
-                indicatorOpacity = 1.0
-            } else if let override = hoverTintOverride {
-                bgColor = override.withAlphaComponent(0.26)
-                borderColor = .clear
-                borderWidth = 0
-                tintColor = override
-                indicatorOpacity = 0.0
-            } else {
-                bgColor = isLightSurface ? NSColor.black.withAlphaComponent(0.14) : NSColor.white.withAlphaComponent(0.20)
-                borderColor = .clear
-                borderWidth = 0
-                tintColor = .labelColor
-                indicatorOpacity = 0.0
-            }
+            targetAlpha = 0.55
+            tintColor = isActiveState ? activeAccentColor : (hoverTintOverride ?? .labelColor)
+            indicatorOpacity = isActiveState ? 1.0 : 0.0
         } else if isActiveState {
-            bgColor = activeAccentColor.withAlphaComponent(isHovered ? 0.24 : (isLightSurface ? 0.14 : 0.18))
-            borderColor = activeAccentColor.withAlphaComponent(isHovered ? 0.55 : 0.38)
-            borderWidth = 1.0
+            targetAlpha = 1.0
             tintColor = activeAccentColor
             indicatorOpacity = 1.0
         } else if isHovered {
-            if let override = hoverTintOverride {
-                bgColor = override.withAlphaComponent(isLightSurface ? 0.14 : 0.18)
-                tintColor = override
-            } else {
-                bgColor = isLightSurface ? NSColor.black.withAlphaComponent(0.08) : NSColor.white.withAlphaComponent(0.12)
-                tintColor = .labelColor
-            }
-            borderColor = .clear
-            borderWidth = 0
+            targetAlpha = 1.0
+            tintColor = hoverTintOverride ?? .labelColor
             indicatorOpacity = 0.0
         } else {
-            bgColor = .clear
-            borderColor = .clear
-            borderWidth = 0
+            targetAlpha = 1.0
             tintColor = restTintColor ?? .secondaryLabelColor
             indicatorOpacity = 0.0
         }
 
         let apply = {
-            self.layer?.backgroundColor = bgColor.cgColor
-            self.layer?.borderColor = borderColor.cgColor
-            self.layer?.borderWidth = borderWidth
+            self.layer?.backgroundColor = NSColor.clear.cgColor
+            self.layer?.borderWidth = 0
+            self.layer?.borderColor = nil
             self.activeIndicatorLayer.backgroundColor = self.activeAccentColor.cgColor
             self.activeIndicatorLayer.opacity = indicatorOpacity
             self.contentTintColor = tintColor
+            self.alphaValue = targetAlpha
         }
 
         if animated {
