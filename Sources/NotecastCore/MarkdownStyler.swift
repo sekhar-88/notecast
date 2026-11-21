@@ -148,7 +148,9 @@ public final class MarkdownStyler {
                     nonInlineLineRanges.append(contentRange)
                 }
             }
-            index = NSMaxRange(fullLineRange)
+            let nextIndex = NSMaxRange(fullLineRange)
+            guard nextIndex > index else { break }
+            index = nextIndex
         }
 
         styleInlineElements(storage, nsString: nsString, in: paragraphRange, skipping: nonInlineLineRanges)

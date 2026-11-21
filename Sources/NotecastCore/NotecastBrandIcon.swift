@@ -129,118 +129,23 @@ public enum NotecastBrandIcon {
             ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         }
 
-        let squircleRect = includeOuterMargin
-            ? CGRect(x: 100, y: 100, width: 824, height: 824)
-            : CGRect(x: 28, y: 28, width: 968, height: 968)
-        let squircleRadius: CGFloat = includeOuterMargin ? 186 : 216
-        let squirclePath = CGPath(
-            roundedRect: squircleRect,
-            cornerWidth: squircleRadius,
-            cornerHeight: squircleRadius,
-            transform: nil
-        )
-
-        if includeOuterMargin {
-            ctx.saveGState()
-            ctx.setShadow(
-                offset: CGSize(width: 0, height: -14),
-                blur: 24,
-                color: cgColor(0, 0, 0, 0.34, space: colorSpace)
-            )
-            ctx.addPath(squirclePath)
-            ctx.setFillColor(cgColor(0x0B / 255.0, 0x0E / 255.0, 0x17 / 255.0, 1.0, space: colorSpace))
-            ctx.fillPath()
-            ctx.restoreGState()
-        }
-
-        // Clip all interior icon layers cleanly to the macOS squircle.
-        ctx.saveGState()
-        ctx.addPath(squirclePath)
-        ctx.clip()
-
-        // Base dark obsidian gradient.
-        if let bgGradient = CGGradient(
-            colorsSpace: colorSpace,
-            colors: [
-                cgColor(0x1D / 255.0, 0x23 / 255.0, 0x36 / 255.0, 1.0, space: colorSpace),
-                cgColor(0x10 / 255.0, 0x14 / 255.0, 0x20 / 255.0, 1.0, space: colorSpace),
-                cgColor(0x07 / 255.0, 0x09 / 255.0, 0x10 / 255.0, 1.0, space: colorSpace)
-            ] as CFArray,
-            locations: [0.0, 0.52, 1.0]
-        ) {
-            ctx.drawLinearGradient(
-                bgGradient,
-                start: CGPoint(x: 512, y: squircleRect.maxY),
-                end: CGPoint(x: 512, y: squircleRect.minY),
-                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-            )
-        }
-
-        // Dual atmospheric aurora glows behind the note cards.
-        drawRadialGlow(
-            in: ctx,
-            space: colorSpace,
-            center: CGPoint(x: 360, y: 690),
-            radius: 390,
-            rgb: palette.primary,
-            peakAlpha: 0.28
-        )
-        drawRadialGlow(
-            in: ctx,
-            space: colorSpace,
-            center: CGPoint(x: 685, y: 315),
-            radius: 360,
-            rgb: palette.secondary,
-            peakAlpha: 0.24
-        )
-
-        // Subtle glass specular wash across top-left.
-        if let glassSheen = CGGradient(
-            colorsSpace: colorSpace,
-            colors: [
-                cgColor(1, 1, 1, 0.06, space: colorSpace),
-                cgColor(1, 1, 1, 0.0, space: colorSpace)
-            ] as CFArray,
-            locations: [0.0, 1.0]
-        ) {
-            ctx.drawLinearGradient(
-                glassSheen,
-                start: CGPoint(x: squircleRect.minX, y: squircleRect.maxY),
-                end: CGPoint(x: 620, y: 420),
-                options: []
-            )
-        }
+        let zoom: CGFloat = includeOuterMargin ? 1.48 : 1.74
+        ctx.translateBy(x: 512, y: 512)
+        ctx.scaleBy(x: zoom, y: zoom)
+        ctx.translateBy(x: -508, y: -510)
 
         // Back ghost outline sheet (echoing Notecast's Ghost Outline Mode).
         drawBackGhostSheet(in: ctx, space: colorSpace, detailPixels: detailPixels, palette: palette)
 
         // Foreground folded-corner luminous note sheet.
-        drawPrimaryNoteSheet(in: ctx, space: colorSpace, detailPixels: detailPixels, palette: palette)
+        drawPrimaryNoteSheet(
+            in: ctx,
+            space: colorSpace,
+            detailPixels: detailPixels,
+            drawOuterShadow: includeOuterMargin,
+            palette: palette
+        )
 
-        // Subtle inner rim highlight along the outer squircle.
-        ctx.saveGState()
-        ctx.addPath(squirclePath)
-        ctx.setLineWidth(detailPixels <= 48 ? 16 : 6)
-        ctx.replacePathWithStrokedPath()
-        ctx.clip()
-        if let rimGradient = CGGradient(
-            colorsSpace: colorSpace,
-            colors: [
-                cgColor(1, 1, 1, 0.26, space: colorSpace),
-                cgColor(1, 1, 1, 0.06, space: colorSpace)
-            ] as CFArray,
-            locations: [0.0, 1.0]
-        ) {
-            ctx.drawLinearGradient(
-                rimGradient,
-                start: CGPoint(x: 512, y: squircleRect.maxY),
-                end: CGPoint(x: 512, y: squircleRect.minY),
-                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-            )
-        }
-        ctx.restoreGState()
-
-        ctx.restoreGState() // End squircle clip
         if usesTransparencyLayer {
             ctx.endTransparencyLayer()
         }
@@ -337,35 +242,6 @@ public enum NotecastBrandIcon {
 
     // MARK: - Private Vector Helpers
 
-    private static func drawRadialGlow(
-        in ctx: CGContext,
-        space: CGColorSpace,
-        center: CGPoint,
-        radius: CGFloat,
-        rgb: (r: CGFloat, g: CGFloat, b: CGFloat),
-        peakAlpha: CGFloat
-    ) {
-        guard let gradient = CGGradient(
-            colorsSpace: space,
-            colors: [
-                cgColor(rgb.r, rgb.g, rgb.b, peakAlpha, space: space),
-                cgColor(rgb.r, rgb.g, rgb.b, 0.0, space: space)
-            ] as CFArray,
-            locations: [0.0, 1.0]
-        ) else {
-            return
-        }
-
-        ctx.drawRadialGradient(
-            gradient,
-            startCenter: center,
-            startRadius: 0,
-            endCenter: center,
-            endRadius: radius,
-            options: []
-        )
-    }
-
     private static func drawBackGhostSheet(
         in ctx: CGContext,
         space: CGColorSpace,
@@ -381,12 +257,12 @@ public enum NotecastBrandIcon {
         let backPath = CGPath(roundedRect: backRect, cornerWidth: 60, cornerHeight: 60, transform: nil)
 
         ctx.addPath(backPath)
-        ctx.setFillColor(cgColor(1, 1, 1, 0.045, space: space))
+        ctx.setFillColor(cgColor(0x13 / 255.0, 0x17 / 255.0, 0x26 / 255.0, 0.58, space: space))
         ctx.fillPath()
 
         ctx.addPath(backPath)
-        ctx.setStrokeColor(cgColor(palette.secondary.r, palette.secondary.g, palette.secondary.b, 0.46, space: space))
-        ctx.setLineWidth(detailPixels <= 48 ? 16 : 10)
+        ctx.setStrokeColor(cgColor(palette.secondary.r, palette.secondary.g, palette.secondary.b, 0.62, space: space))
+        ctx.setLineWidth(detailPixels <= 48 ? 14 : 10)
         ctx.strokePath()
 
         ctx.restoreGState()
@@ -396,35 +272,38 @@ public enum NotecastBrandIcon {
         in ctx: CGContext,
         space: CGColorSpace,
         detailPixels: Int,
+        drawOuterShadow: Bool,
         palette: Palette
     ) {
         let cardRect = CGRect(x: 300, y: 252, width: 440, height: 520)
         let cardPath = foldedCardPath(rect: cardRect, cornerRadius: 64, foldSize: 128)
 
-        // Deep drop shadow behind the floating note card.
-        ctx.saveGState()
-        ctx.setShadow(
-            offset: CGSize(width: 0, height: -22),
-            blur: 38,
-            color: cgColor(0, 0, 0, 0.62, space: space)
-        )
-        ctx.addPath(cardPath)
-        ctx.setFillColor(cgColor(0x15 / 255.0, 0x1B / 255.0, 0x2B / 255.0, 1.0, space: space))
-        ctx.fillPath()
-        ctx.restoreGState()
+        if drawOuterShadow {
+            // Deep drop shadow behind the floating note card.
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: CGSize(width: 0, height: -22),
+                blur: 38,
+                color: cgColor(0, 0, 0, 0.62, space: space)
+            )
+            ctx.addPath(cardPath)
+            ctx.setFillColor(cgColor(0x15 / 255.0, 0x1B / 255.0, 0x2B / 255.0, 1.0, space: space))
+            ctx.fillPath()
+            ctx.restoreGState()
 
-        // Secondary ambient neon bloom around the floating card.
-        ctx.saveGState()
-        ctx.setShadow(
-            offset: .zero,
-            blur: 30,
-            color: cgColor(palette.primary.r, palette.primary.g, palette.primary.b, 0.34, space: space)
-        )
-        ctx.addPath(cardPath)
-        ctx.setStrokeColor(cgColor(palette.primary.r, palette.primary.g, palette.primary.b, 0.30, space: space))
-        ctx.setLineWidth(detailPixels <= 48 ? 20 : 12)
-        ctx.strokePath()
-        ctx.restoreGState()
+            // Secondary ambient neon bloom around the floating card.
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: .zero,
+                blur: 30,
+                color: cgColor(palette.primary.r, palette.primary.g, palette.primary.b, 0.34, space: space)
+            )
+            ctx.addPath(cardPath)
+            ctx.setStrokeColor(cgColor(palette.primary.r, palette.primary.g, palette.primary.b, 0.30, space: space))
+            ctx.setLineWidth(detailPixels <= 48 ? 16 : 12)
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
 
         // Frosted obsidian-slate interior gradient.
         ctx.saveGState()

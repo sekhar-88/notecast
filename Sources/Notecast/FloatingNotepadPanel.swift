@@ -1029,15 +1029,24 @@ private final class NeonGlowOverlayView: NSView {
         innerGlowPath.addPath(CGPath(roundedRect: bounds, cornerWidth: panelCornerRadius, cornerHeight: panelCornerRadius, transform: nil))
         innerGlowLayer.path = innerGlowPath
 
-        let outlineRect = bounds.insetBy(dx: 0.75, dy: 0.75)
-        let outlineRadius = max(2, panelCornerRadius - 0.75)
-        let outlineCGPath = CGPath(roundedRect: outlineRect, cornerWidth: outlineRadius, cornerHeight: outlineRadius, transform: nil)
-        ghostContrastOutlineLayer.path = outlineCGPath
-        ghostOutlineLayer.path = outlineCGPath
-
         let r = bounds.insetBy(dx: 1.0, dy: 1.0)
         let cr = max(2, panelCornerRadius - 1.0)
         let arm: CGFloat = 12
+        let gap: CGFloat = 4
+        let startX = r.minX + cr + arm + gap
+        let endX = r.maxX - cr - arm - gap
+
+        // Top and bottom dotted bars only (left/right vertical dotted bars hidden in Ghost Outline Mode).
+        let outlinePath = CGMutablePath()
+        if startX < endX {
+            outlinePath.move(to: CGPoint(x: startX, y: r.maxY))
+            outlinePath.addLine(to: CGPoint(x: endX, y: r.maxY))
+            outlinePath.move(to: CGPoint(x: startX, y: r.minY))
+            outlinePath.addLine(to: CGPoint(x: endX, y: r.minY))
+        }
+        ghostContrastOutlineLayer.path = outlinePath
+        ghostOutlineLayer.path = outlinePath
+
         let cornersPath = CGMutablePath()
 
         // Bottom-left

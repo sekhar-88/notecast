@@ -627,4 +627,117 @@ struct AppSettingsAndStylerTests {
         #expect(headerImage.size == NSSize(width: 18, height: 18))
         #expect(headerImage.isTemplate == false)
     }
+
+    @Test("Deleting large selections including end-of-note does not throw or stale selection")
+    @MainActor
+    func deleteLargeSelectionRegression() {
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 380, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+
+        let styler = MarkdownStyler()
+
+        final class HarnessTextView: NSTextView, @MainActor NSTextStorageDelegate {
+            let styler: MarkdownStyler
+            var isStyling = false
+            var pendingEditedRange: NSRange?
+            var changeCallbackCount = 0
+
+            init(frame: NSRect, container: NSTextContainer, styler: MarkdownStyler) {
+                self.styler = styler
+                super.init(frame: frame, textContainer: container)
+            }
+
+            @available(*, unavailable)
+            required init?(coder: NSCoder) {
+                fatalError("init(coder:) has not been implemented")
+            }
+
+            func textStorage(
+                _ textStorage: NSTextStorage,
+                didProcessEditing editedMask: NSTextStorageEditActions,
+                range editedRange: NSRange,
+                changeInLength delta: Int
+            ) {
+                guard editedMask.contains(.editedCharacters), !isStyling else { return }
+                if let existing = pendingEditedRange {
+                    pendingEditedRange = NSUnionRange(existing, editedRange)
+                } else {
+                    pendingEditedRange = editedRange
+                }
+            }
+
+            override func didChangeText() {
+                super.didChangeText()
+                guard !isStyling else { return }
+
+                let rangeToStyle = pendingEditedRange ?? selectedRange()
+                pendingEditedRange = nil
+
+                if let storage = textStorage {
+                    isStyling = true
+                    storage.beginEditing()
+                    styler.style(storage, in: rangeToStyle)
+                    storage.endEditing()
+                    isStyling = false
+                }
+
+                typingAttributes = styler.baseAttributes()
+                changeCallbackCount += 1
+            }
+        }
+
+        let textView = HarnessTextView(frame: NSRect(x: 0, y: 0, width: 380, height: 400), container: container, styler: styler)
+        textView.isRichText = true
+        textView.allowsUndo = true
+        textView.isEditable = true
+        textView.isSelectable = true
+        storage.delegate = textView
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 420),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = textView
+
+        let originalText = "# Heading One\n\n- [ ] Task **bold** item\n- [x] Done `code`\nAnother paragraph with *italic* words\n"
+        textView.isStyling = true
+        textView.string = originalText
+        styler.styleAll(storage)
+        textView.typingAttributes = styler.baseAttributes()
+        textView.undoManager?.removeAllActions()
+        textView.isStyling = false
+        layoutManager.ensureLayout(for: container)
+
+        // Delete middle selection across multiple Markdown paragraphs
+        textView.setSelectedRange(NSRange(location: 5, length: 50))
+        textView.deleteBackward(nil)
+        #expect(textView.selectedRange().location == 5)
+        #expect(textView.selectedRange().length == 0)
+
+        // Delete selection extending to the very end of text (previously threw NSRangeException)
+        let tailStart = 8
+        textView.setSelectedRange(NSRange(location: tailStart, length: storage.length - tailStart))
+        textView.deleteBackward(nil)
+        #expect(storage.length == tailStart)
+        #expect(textView.selectedRange() == NSRange(location: tailStart, length: 0))
+
+        // Select all and delete, then verify undo & subsequent typing work cleanly
+        textView.selectAll(nil)
+        textView.deleteBackward(nil)
+        #expect(storage.length == 0)
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+
+        textView.undoManager?.undo()
+        #expect(textView.string == originalText)
+
+        textView.insertText(" + next", replacementRange: NSRange(location: storage.length, length: 0))
+        #expect(textView.string.hasSuffix(" + next"))
+        #expect(textView.changeCallbackCount >= 5)
+    }
 }

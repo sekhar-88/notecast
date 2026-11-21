@@ -16,6 +16,7 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
 
     private let styler: MarkdownStyler
     private var isApplyingStyling = false
+    private var pendingEditedRange: NSRange?
 
     private static let listLinePrefixRegex = try! NSRegularExpression(
         pattern: #"^[ \t]*(?:[-*+]|\d+\.)\s"#
@@ -72,6 +73,7 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
 
     func loadInitialText(_ text: String) {
         isApplyingStyling = true
+        pendingEditedRange = nil
         string = text
         if let storage = textStorage {
             styler.styleAll(storage)
@@ -112,9 +114,27 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
     ) {
         guard editedMask.contains(.editedCharacters), !isApplyingStyling else { return }
 
-        isApplyingStyling = true
-        styler.style(textStorage, in: editedRange)
-        isApplyingStyling = false
+        if let existing = pendingEditedRange {
+            pendingEditedRange = NSUnionRange(existing, editedRange)
+        } else {
+            pendingEditedRange = editedRange
+        }
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        guard !isApplyingStyling else { return }
+
+        let rangeToStyle = pendingEditedRange ?? selectedRange()
+        pendingEditedRange = nil
+
+        if let storage = textStorage {
+            isApplyingStyling = true
+            storage.beginEditing()
+            styler.style(storage, in: rangeToStyle)
+            storage.endEditing()
+            isApplyingStyling = false
+        }
 
         typingAttributes = styler.baseAttributes()
         onTextChanged?(string)
@@ -146,8 +166,9 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
         }
         if shouldChangeText(in: selection, replacementString: "  ") {
             textStorage?.replaceCharacters(in: selection, with: "  ")
+            let maxLen = textStorage?.length ?? 0
+            setSelectedRange(NSRange(location: min(selection.location + 2, maxLen), length: 0))
             didChangeText()
-            setSelectedRange(NSRange(location: selection.location + 2, length: 0))
         }
     }
 
@@ -307,8 +328,11 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
             return
         }
         textStorage?.replaceCharacters(in: result.replacementRange, with: result.replacementText)
+        let maxLen = textStorage?.length ?? 0
+        let clampedLoc = min(max(0, result.newSelection.location), maxLen)
+        let clampedLen = min(max(0, result.newSelection.length), maxLen - clampedLoc)
+        setSelectedRange(NSRange(location: clampedLoc, length: clampedLen))
         didChangeText()
-        setSelectedRange(result.newSelection)
         if let actionName {
             undoManager?.setActionName(actionName)
         }
