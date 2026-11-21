@@ -568,12 +568,14 @@ struct AppSettingsAndStylerTests {
         #expect(settings.neonAccent == .cyan)
         #expect(settings.fontFamily == "system")
         #expect(settings.ghostOnUnfocus == false)
+        #expect(settings.ghostWakeZoneFraction == AppSettings.defaultGhostWakeZoneFraction)
 
         settings.surfaceStyle = .midnightSlate
         settings.neonGlowEnabled = false
         settings.neonAccent = .magenta
         settings.fontFamily = "system-serif"
         settings.ghostOnUnfocus = true
+        settings.ghostWakeZoneFraction = 0.30
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.surfaceStyle == .midnightSlate)
@@ -581,6 +583,12 @@ struct AppSettingsAndStylerTests {
         #expect(reloaded.neonAccent == .magenta)
         #expect(reloaded.fontFamily == "system-serif")
         #expect(reloaded.ghostOnUnfocus == true)
+        #expect(abs(reloaded.ghostWakeZoneFraction - 0.30) < 0.0001)
+
+        reloaded.ghostWakeZoneFraction = 0.02
+        #expect(reloaded.ghostWakeZoneFraction == AppSettings.minGhostWakeZoneFraction)
+        reloaded.ghostWakeZoneFraction = 1.5
+        #expect(reloaded.ghostWakeZoneFraction == AppSettings.maxGhostWakeZoneFraction)
         #expect(SurfaceStyle.allCases.count == 12)
         #expect(SurfaceStyle.warmPaper.isLight)
         #expect(SurfaceStyle.coolMist.isLight)

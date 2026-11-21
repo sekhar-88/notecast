@@ -17,6 +17,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     var onAlwaysOnTopChanged: ((Bool) -> Void)?
     var onFollowAllSpacesChanged: ((Bool) -> Void)?
     var onGhostOnUnfocusChanged: ((Bool) -> Void)?
+    var onGhostWakeZoneFractionChanged: ((Double, Bool) -> Void)?
     var onRevealNotesFolder: (() -> Void)?
 
     private let settings: AppSettings
@@ -35,6 +36,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     private let alwaysOnTopCheckbox = NSButton(checkboxWithTitle: "Always on top of other windows", target: nil, action: nil)
     private let followSpacesCheckbox = NSButton(checkboxWithTitle: "Float across all Spaces & full-screen apps", target: nil, action: nil)
     private let ghostOnUnfocusCheckbox = NSButton(checkboxWithTitle: "Transparent outline when unfocused", target: nil, action: nil)
+    private let ghostWakeZoneSlider = NSSlider(
+        value: AppSettings.defaultGhostWakeZoneFraction,
+        minValue: AppSettings.minGhostWakeZoneFraction,
+        maxValue: AppSettings.maxGhostWakeZoneFraction,
+        target: nil,
+        action: nil
+    )
+    private let ghostWakeZoneValueLabel = NSTextField(labelWithString: "45%")
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Notecast at login", target: nil, action: nil)
     private let launchNoteLabel = NSTextField(labelWithString: "")
 
@@ -47,7 +56,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         self.hotKeyRecorder = HotKeyRecorderControl(combo: settings.hotKey)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 490, height: 545),
+            contentRect: NSRect(x: 0, y: 0, width: 490, height: 580),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -124,6 +133,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         alwaysOnTopCheckbox.state = settings.alwaysOnTop ? .on : .off
         followSpacesCheckbox.state = settings.followAllSpaces ? .on : .off
         ghostOnUnfocusCheckbox.state = settings.ghostOnUnfocus ? .on : .off
+        ghostWakeZoneSlider.isEnabled = settings.ghostOnUnfocus
+        ghostWakeZoneSlider.doubleValue = settings.ghostWakeZoneFraction
+        ghostWakeZoneValueLabel.stringValue = "\(Int((settings.ghostWakeZoneFraction * 100).rounded()))%"
 
         refreshLaunchAtLoginState()
     }
@@ -131,6 +143,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     func windowWillClose(_ notification: Notification) {
         hotKeyRecorder.cancelRecordingIfNeeded()
         hotKeyStatusLabel.stringValue = ""
+        onGhostWakeZoneFractionChanged?(settings.ghostWakeZoneFraction, false)
     }
 
     // MARK: - Layout
@@ -216,6 +229,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         behaviorStack.alignment = .leading
         behaviorStack.spacing = 6
         grid.addRow(with: [makeTitleLabel("Window:"), behaviorStack])
+
+        // 8. Ghost Wake Area slider
+        ghostWakeZoneSlider.isContinuous = true
+        ghostWakeZoneValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        ghostWakeZoneValueLabel.textColor = .secondaryLabelColor
+        ghostWakeZoneValueLabel.alignment = .left
+        NSLayoutConstraint.activate([
+            ghostWakeZoneSlider.widthAnchor.constraint(equalToConstant: 155),
+            ghostWakeZoneValueLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 96)
+        ])
+        let ghostWakeRow = NSStackView(views: [ghostWakeZoneSlider, ghostWakeZoneValueLabel])
+        ghostWakeRow.orientation = .horizontal
+        ghostWakeRow.spacing = 8
+        grid.addRow(with: [makeTitleLabel("Ghost Wake Area:"), ghostWakeRow])
 
         // 8. Launch at login
         launchNoteLabel.font = NSFont.systemFont(ofSize: 11)
@@ -336,6 +363,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         ghostOnUnfocusCheckbox.target = self
         ghostOnUnfocusCheckbox.action = #selector(handleGhostOnUnfocusToggled)
 
+        ghostWakeZoneSlider.target = self
+        ghostWakeZoneSlider.action = #selector(handleGhostWakeZoneChanged)
+
         launchAtLoginCheckbox.target = self
         launchAtLoginCheckbox.action = #selector(handleLaunchAtLoginToggled)
     }
@@ -423,7 +453,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     }
 
     @objc private func handleGhostOnUnfocusToggled() {
-        onGhostOnUnfocusChanged?(ghostOnUnfocusCheckbox.state == .on)
+        let enabled = ghostOnUnfocusCheckbox.state == .on
+        ghostWakeZoneSlider.isEnabled = enabled
+        onGhostOnUnfocusChanged?(enabled)
+    }
+
+    @objc private func handleGhostWakeZoneChanged() {
+        let value = ghostWakeZoneSlider.doubleValue
+        ghostWakeZoneValueLabel.stringValue = "\(Int((value * 100).rounded()))%"
+        let eventType = NSApp.currentEvent?.type
+        let isDragging = (eventType == .leftMouseDown || eventType == .leftMouseDragged)
+        onGhostWakeZoneFractionChanged?(value, isDragging)
     }
 
     @objc private func handleLaunchAtLoginToggled() {

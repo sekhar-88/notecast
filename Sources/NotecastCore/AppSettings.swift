@@ -205,6 +205,7 @@ public final class AppSettings {
         static let neonAccent = "notecast.neonAccent"
         static let fontFamily = "notecast.fontFamily"
         static let ghostOnUnfocus = "notecast.ghostOnUnfocus"
+        static let ghostWakeZoneFraction = "notecast.ghostWakeZoneFraction"
     }
 
     public static let minOpacity: Double = 0.65
@@ -214,6 +215,10 @@ public final class AppSettings {
     public static let minFontSize: CGFloat = 11
     public static let maxFontSize: CGFloat = 26
     public static let defaultFontSize: CGFloat = 14
+
+    public static let minGhostWakeZoneFraction: Double = 0.15
+    public static let maxGhostWakeZoneFraction: Double = 1.0
+    public static let defaultGhostWakeZoneFraction: Double = 0.45
 
     private let defaults: UserDefaults
 
@@ -374,6 +379,22 @@ public final class AppSettings {
         set {
             defaults.set(newValue, forKey: Keys.ghostOnUnfocus)
         }
+    }
+
+    public var ghostWakeZoneFraction: Double {
+        get {
+            guard defaults.object(forKey: Keys.ghostWakeZoneFraction) != nil else {
+                return Self.defaultGhostWakeZoneFraction
+            }
+            return Self.clampGhostWakeZoneFraction(defaults.double(forKey: Keys.ghostWakeZoneFraction))
+        }
+        set {
+            defaults.set(Self.clampGhostWakeZoneFraction(newValue), forKey: Keys.ghostWakeZoneFraction)
+        }
+    }
+
+    public static func clampGhostWakeZoneFraction(_ value: Double) -> Double {
+        min(max(value, minGhostWakeZoneFraction), maxGhostWakeZoneFraction)
     }
 
     private static func clampOpacity(_ value: Double) -> Double {

@@ -50,6 +50,8 @@ final class FloatingNotepadPanel: NSPanel {
     private var neonAccent: NeonAccent
     private var isAlwaysOnTop: Bool
     private var ghostOnUnfocus: Bool
+    private var ghostWakeZoneFraction: Double
+    private var ghostWakeZoneWidthConstraint: NSLayoutConstraint?
     private var isPanelActive = false
 
     init(
@@ -63,6 +65,7 @@ final class FloatingNotepadPanel: NSPanel {
         neonGlowEnabled: Bool,
         neonAccent: NeonAccent,
         ghostOnUnfocus: Bool,
+        ghostWakeZoneFraction: Double,
         hotKeyHint: String
     ) {
         self.surfaceStyle = surfaceStyle
@@ -71,6 +74,7 @@ final class FloatingNotepadPanel: NSPanel {
         self.neonAccent = neonAccent
         self.isAlwaysOnTop = alwaysOnTop
         self.ghostOnUnfocus = ghostOnUnfocus
+        self.ghostWakeZoneFraction = AppSettings.clampGhostWakeZoneFraction(ghostWakeZoneFraction)
 
         let scrollView = WrappingScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -210,6 +214,32 @@ final class FloatingNotepadPanel: NSPanel {
         } else if enabled && !isPanelActive && isVisible {
             let allowGhost = onShouldAllowGhostMode?() ?? true
             setGhosted(allowGhost, animated: true)
+        }
+    }
+
+    func applyGhostWakeZoneFraction(_ fraction: Double, previewOverlay: Bool = false) {
+        let clamped = AppSettings.clampGhostWakeZoneFraction(fraction)
+        ghostWakeZoneFraction = clamped
+
+        if let existing = ghostWakeZoneWidthConstraint {
+            existing.isActive = false
+        }
+        let updated = ghostWakeZoneView.widthAnchor.constraint(
+            equalTo: rootContainer.widthAnchor,
+            multiplier: CGFloat(clamped)
+        )
+        updated.isActive = true
+        ghostWakeZoneWidthConstraint = updated
+        rootContainer.layoutSubtreeIfNeeded()
+
+        if !isGhosted {
+            if previewOverlay {
+                ghostWakeZoneView.update(neonGlowEnabled: neonGlowEnabled, accentColor: neonAccent.nsColor, animated: false)
+                ghostWakeZoneView.alphaValue = 1.0
+                ghostWakeZoneView.isHidden = false
+            } else {
+                ghostWakeZoneView.isHidden = true
+            }
         }
     }
 
@@ -489,6 +519,12 @@ final class FloatingNotepadPanel: NSPanel {
         rootContainer.addSubview(ghostWakeZoneView)
         rootContainer.addSubview(neonOverlayView)
 
+        let wakeWidthConstraint = ghostWakeZoneView.widthAnchor.constraint(
+            equalTo: rootContainer.widthAnchor,
+            multiplier: CGFloat(ghostWakeZoneFraction)
+        )
+        ghostWakeZoneWidthConstraint = wakeWidthConstraint
+
         NSLayoutConstraint.activate([
             hudEffectView.topAnchor.constraint(equalTo: rootContainer.topAnchor),
             hudEffectView.leadingAnchor.constraint(equalTo: rootContainer.leadingAnchor),
@@ -561,7 +597,7 @@ final class FloatingNotepadPanel: NSPanel {
             ghostWakeZoneView.topAnchor.constraint(equalTo: rootContainer.topAnchor),
             ghostWakeZoneView.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
             ghostWakeZoneView.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
-            ghostWakeZoneView.widthAnchor.constraint(equalTo: rootContainer.widthAnchor, multiplier: 0.55)
+            wakeWidthConstraint
         ])
     }
 
@@ -796,7 +832,7 @@ private final class GhostWakeZoneView: NSView {
         wantsLayer = true
         layer?.masksToBounds = true
 
-        let stops: [NSNumber] = [0.0, 0.16, 0.36, 0.58, 0.80, 1.0]
+        let stops: [NSNumber] = [0.0, 0.12, 0.30, 0.54, 0.78, 1.0]
 
         contrastGradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
         contrastGradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
@@ -830,12 +866,12 @@ private final class GhostWakeZoneView: NSView {
     private func applyAppearance(animated: Bool) {
         let slateBase = NSColor(srgbRed: 0x14 / 255.0, green: 0x19 / 255.0, blue: 0x24 / 255.0, alpha: 1.0)
         let contrastAlphas: [CGFloat] = isHovered
-            ? [0.0, 0.018, 0.055, 0.11, 0.17, 0.22]
-            : [0.0, 0.01, 0.035, 0.075, 0.12, 0.16]
+            ? [0.0, 0.022, 0.065, 0.12, 0.175, 0.22]
+            : [0.0, 0.015, 0.045, 0.085, 0.125, 0.16]
         let accentBase = neonGlowEnabled ? accentColor : NSColor.white
         let accentAlphas: [CGFloat] = isHovered
-            ? [0.0, 0.015, 0.045, 0.095, 0.16, 0.22]
-            : [0.0, 0.008, 0.025, 0.06, 0.10, 0.15]
+            ? [0.0, 0.018, 0.052, 0.10, 0.165, 0.22]
+            : [0.0, 0.012, 0.035, 0.068, 0.105, 0.15]
 
         let apply = {
             self.contrastGradientLayer.colors = contrastAlphas.map { slateBase.withAlphaComponent($0).cgColor }

@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             neonGlowEnabled: settings.neonGlowEnabled,
             neonAccent: settings.neonAccent,
             ghostOnUnfocus: settings.ghostOnUnfocus,
+            ghostWakeZoneFraction: settings.ghostWakeZoneFraction,
             hotKeyHint: settings.hotKey.displayString
         )
         panel.delegate = self
@@ -573,6 +574,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settingsController?.refreshFromSettings()
     }
 
+    private func updateGhostWakeZoneFraction(_ fraction: Double, previewOverlay: Bool) {
+        settings.ghostWakeZoneFraction = fraction
+        panel.applyGhostWakeZoneFraction(fraction, previewOverlay: previewOverlay)
+    }
+
     private func updateHotKey(_ combo: HotKeyCombo) -> OSStatus {
         let status = hotKeyManager.register(combo)
         if status == noErr {
@@ -740,6 +746,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             controller.onGhostOnUnfocusChanged = { [weak self] enabled in
                 self?.updateGhostOnUnfocus(enabled)
+            }
+            controller.onGhostWakeZoneFractionChanged = { [weak self] fraction, isPreviewing in
+                self?.updateGhostWakeZoneFraction(fraction, previewOverlay: isPreviewing)
             }
             controller.onRevealNotesFolder = { [weak self] in
                 self?.revealNotesFolderInFinder()
