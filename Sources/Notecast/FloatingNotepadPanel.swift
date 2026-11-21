@@ -23,7 +23,14 @@ final class FloatingNotepadPanel: NSPanel {
     var onShouldAllowGhostMode: (() -> Bool)?
     var onWakeFromGhost: (() -> Void)?
     var onGhostDragEnded: (() -> Void)?
+    var onHeaderDragEnded: (() -> Void)?
+    var onCommandPaletteHidden: (() -> Void)?
     var onShouldEnsureWakeZoneOnScreen: (() -> Void)?
+
+    private struct HeaderIconCacheKey: Hashable {
+        let accent: NeonAccent?
+        let isActive: Bool
+    }
 
     private(set) var activePaletteMode: PaletteMode = .all
     private(set) var isGhosted = false
@@ -57,6 +64,7 @@ final class FloatingNotepadPanel: NSPanel {
     private var ghostWakeZoneFraction: Double
     private var ghostWakeZoneWidthConstraint: NSLayoutConstraint?
     private var isPanelActive = false
+    private var headerIconCache: [HeaderIconCacheKey: NSImage] = [:]
 
     init(
         contentRect: NSRect,
@@ -266,20 +274,25 @@ final class FloatingNotepadPanel: NSPanel {
     }
 
     func applySurfaceStyle(_ style: SurfaceStyle, opacity: Double) {
+        let styleChanged = (self.surfaceStyle != style)
         self.surfaceStyle = style
         self.panelOpacity = opacity
 
-        if style.isOpaque {
-            appearance = NSAppearance(named: style.isLight ? .aqua : .darkAqua)
-        } else {
-            appearance = nil
+        let targetAppearanceName: NSAppearance.Name? = style.isOpaque
+            ? (style.isLight ? .aqua : .darkAqua)
+            : nil
+        if appearance?.name != targetAppearanceName {
+            appearance = targetAppearanceName.flatMap(NSAppearance.init(named:))
         }
 
         if !isGhosted {
+            let hudVisibilityChanged = (hudEffectView.isHidden != style.isOpaque)
             hudEffectView.isHidden = style.isOpaque
             rootContainer.layer?.backgroundColor = (style.backgroundColor ?? .clear).cgColor
             alphaValue = style.isOpaque ? 1.0 : CGFloat(opacity)
-            invalidateShadow()
+            if styleChanged || hudVisibilityChanged {
+                invalidateShadow()
+            }
         }
 
         headerView.layer?.backgroundColor = (style.headerBackgroundColor ?? .clear).cgColor
@@ -320,18 +333,30 @@ final class FloatingNotepadPanel: NSPanel {
     }
 
     func updateNoteTitle(_ title: String) {
-        titleLabel.stringValue = title.isEmpty ? "Notecast" : title
+        let next = title.isEmpty ? "Notecast" : title
+        if titleLabel.stringValue != next {
+            titleLabel.stringValue = next
+        }
     }
 
     func updateHotKeyHint(_ hint: String) {
-        hotKeyHintLabel.stringValue = hint
+        if hotKeyHintLabel.stringValue != hint {
+            hotKeyHintLabel.stringValue = hint
+        }
     }
 
     func updateSaveStatus(_ status: String) {
-        statusLabel.stringValue = status
+        if statusLabel.stringValue != status {
+            statusLabel.stringValue = status
+        }
     }
 
     func setGhosted(_ ghosted: Bool, animated: Bool) {
+        guard isGhosted != ghosted else {
+            refreshActiveNeonVisuals(animated: animated)
+            return
+        }
+
         isGhosted = ghosted
         becomesKeyOnlyIfNeeded = ghosted
         contentWrapperView.isGhosted = ghosted
@@ -425,7 +450,11 @@ final class FloatingNotepadPanel: NSPanel {
     }
 
     func hideCommandPalette() {
+        let wasVisible = !commandPaletteView.isHidden
         commandPaletteView.isHidden = true
+        if wasVisible {
+            onCommandPaletteHidden?()
+        }
         syncHeaderOverlayStates()
         if isNotesListVisible {
             notesListView.focusList()
@@ -435,8 +464,12 @@ final class FloatingNotepadPanel: NSPanel {
     }
 
     func dismissOverlaysAndFocusEditor() {
+        let paletteWasVisible = !commandPaletteView.isHidden
         commandPaletteView.isHidden = true
         notesListView.isHidden = true
+        if paletteWasVisible {
+            onCommandPaletteHidden?()
+        }
         syncHeaderOverlayStates()
         makeFirstResponder(textView)
     }
@@ -673,6 +706,9 @@ final class FloatingNotepadPanel: NSPanel {
         ghostWakeZoneView.onDragEnded = { [weak self] in
             self?.onGhostDragEnded?()
         }
+        headerView.onDragEnded = { [weak self] in
+            self?.onHeaderDragEnded?()
+        }
     }
 
     private var headerButtons: [HeaderIconButton] {
@@ -704,10 +740,25 @@ final class FloatingNotepadPanel: NSPanel {
         let accentColor = neonAccent.nsColor
 
         refreshHeaderButtonsTheme()
-        iconView.image = NotecastBrandIcon.headerIconImage(
-            accentColor: glowActive ? accentColor : nil,
+
+        let iconKey = HeaderIconCacheKey(
+            accent: glowActive ? neonAccent : nil,
             isActive: isPanelActive
         )
+        let headerImage: NSImage
+        if let cached = headerIconCache[iconKey] {
+            headerImage = cached
+        } else {
+            let rendered = NotecastBrandIcon.headerIconImage(
+                accentColor: glowActive ? accentColor : nil,
+                isActive: isPanelActive
+            )
+            headerIconCache[iconKey] = rendered
+            headerImage = rendered
+        }
+        if iconView.image !== headerImage {
+            iconView.image = headerImage
+        }
         separator.update(
             glowActive: glowActive,
             accentColor: accentColor,
@@ -972,6 +1023,14 @@ private final class GhostWakeZoneView: NSView {
         super.layout()
         contrastGradientLayer.frame = bounds
         accentGradientLayer.frame = bounds
+        if !gripPill.bounds.isEmpty {
+            gripPill.layer?.shadowPath = CGPath(
+                roundedRect: gripPill.bounds,
+                cornerWidth: 2,
+                cornerHeight: 2,
+                transform: nil
+            )
+        }
     }
 
     override func updateTrackingAreas() {
@@ -1364,6 +1423,7 @@ private final class NeonGlowOverlayView: NSView {
         innerGlowPath.addRect(outerRect)
         innerGlowPath.addPath(CGPath(roundedRect: bounds, cornerWidth: panelCornerRadius, cornerHeight: panelCornerRadius, transform: nil))
         innerGlowLayer.path = innerGlowPath
+        innerGlowLayer.shadowPath = innerGlowPath
 
         let r = bounds.insetBy(dx: 1.0, dy: 1.0)
         let cr = max(2, panelCornerRadius - 1.0)
@@ -1411,14 +1471,23 @@ private final class NeonGlowOverlayView: NSView {
 
         ghostContrastCornersLayer.path = cornersPath
         ghostCornersLayer.path = cornersPath
+        ghostCornersLayer.shadowPath = cornersPath.copy(
+            strokingWithWidth: ghostCornersLayer.lineWidth,
+            lineCap: .round,
+            lineJoin: .round,
+            miterLimit: 4
+        )
     }
 }
 
 /// Draggable header bar that lets the user reposition the borderless floating panel.
 private final class HeaderDragView: NSView {
+    var onDragEnded: (() -> Void)?
+
     override var mouseDownCanMoveWindow: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
         window?.performDrag(with: event)
+        onDragEnded?()
     }
 }

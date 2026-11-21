@@ -107,7 +107,7 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
                 window.center()
             }
 
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             window.makeKeyAndOrderFront(nil)
         }
     }

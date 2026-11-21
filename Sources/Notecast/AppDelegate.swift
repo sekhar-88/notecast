@@ -38,9 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationWillResignActive(_ notification: Notification) {
-        if let activeNoteID {
-            try? noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
+        if panel != nil {
+            settings.savedWindowFrame = panel.frame
         }
+        flushActiveNoteSync()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -48,9 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
         }
-        if let activeNoteID {
-            try? noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
+        if panel != nil {
+            settings.savedWindowFrame = panel.frame
         }
+        flushActiveNoteSync()
         hotKeyManager.teardown()
     }
 
@@ -126,13 +128,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let liveTitle = NoteLibraryStore.extractTitleAndPreview(from: updatedText).title
             self.panel.updateNoteTitle(liveTitle)
 
-            self.noteLibrary.scheduleSave(noteID: noteID, content: updatedText) { [weak self] savedMeta in
-                DispatchQueue.main.async {
-                    guard let self, self.activeNoteID == savedMeta.id else { return }
-                    self.panel.updateSaveStatus("Saved")
-                    self.panel.updateNoteTitle(savedMeta.title)
+            self.noteLibrary.scheduleSave(
+                noteID: noteID,
+                content: updatedText,
+                onSaved: { [weak self] savedMeta in
+                    DispatchQueue.main.async {
+                        guard let self, self.activeNoteID == savedMeta.id else { return }
+                        self.panel.updateSaveStatus("Saved")
+                        self.panel.updateNoteTitle(savedMeta.title)
+                    }
+                },
+                onError: { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, self.activeNoteID == noteID else { return }
+                        self.panel.updateSaveStatus("Save failed")
+                    }
                 }
-            }
+            )
         }
 
         panel.textView.onFontSizeDelta = { [weak self] delta in
@@ -208,7 +220,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         panel.onGhostDragEnded = { [weak self] in
-            self?.ensureGhostWakeZoneAccessible(animated: true)
+            guard let self else { return }
+            self.settings.savedWindowFrame = self.panel.frame
+            self.ensureGhostWakeZoneAccessible(animated: true)
+        }
+
+        panel.onHeaderDragEnded = { [weak self] in
+            guard let self else { return }
+            self.settings.savedWindowFrame = self.panel.frame
+        }
+
+        panel.onCommandPaletteHidden = { [weak self] in
+            self?.noteLibrary.clearSearchCache()
         }
 
         panel.onShouldEnsureWakeZoneOnScreen = { [weak self] in
@@ -233,6 +256,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         panel.commandPaletteView.queryProvider = { [weak self] query, mode in
             guard let self else { return [] }
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if mode == .all && trimmed.hasPrefix(">") {
+                return CommandPaletteSearch.results(query: query, matchingNotes: [], mode: mode)
+            }
             let matchingNotes = self.noteLibrary.searchNotes(query: query)
             return CommandPaletteSearch.results(query: query, matchingNotes: matchingNotes, mode: mode)
         }
@@ -440,16 +467,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.setFrame(clampedFrame, display: false)
         panel.setGhosted(false, animated: true)
         panel.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
         panel.dismissOverlaysAndFocusEditor()
     }
 
     private func hidePanel() {
-        if let activeNoteID {
-            try? noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
-        }
-        panel.updateSaveStatus("Saved")
+        settings.savedWindowFrame = panel.frame
+        let saved = flushActiveNoteSync()
+        panel.updateSaveStatus(saved ? "Saved" : "Save failed")
         panel.orderOut(nil)
         panel.setGhosted(false, animated: false)
 
@@ -462,9 +488,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // MARK: - Notes & Command Palette Actions
 
-    private func flushActiveNoteSync() {
-        guard let activeNoteID else { return }
-        try? noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
+    @discardableResult
+    private func flushActiveNoteSync() -> Bool {
+        guard let activeNoteID else { return true }
+        do {
+            try noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
+            return true
+        } catch {
+            panel.updateSaveStatus("Save failed")
+            return false
+        }
     }
 
     private func openNote(id: UUID) {
@@ -687,11 +720,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func windowDidMove(_ notification: Notification) {
         guard (notification.object as? NSWindow) === panel else { return }
-        settings.savedWindowFrame = panel.frame
         recordSafeFrameIfAccessible(panel.frame)
     }
 
     func windowDidResize(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === panel else { return }
+        recordSafeFrameIfAccessible(panel.frame)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
         guard (notification.object as? NSWindow) === panel else { return }
         settings.savedWindowFrame = panel.frame
         recordSafeFrameIfAccessible(panel.frame)
@@ -863,7 +900,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.revealNotesFolderInFinder()
             }
             controller.onDidClose = { [weak self] in
-                self?.panel.setSettingsActive(false)
+                guard let self else { return }
+                self.panel.setSettingsActive(false)
+                self.hotKeyManager.resume()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.settingsController?.window?.isVisible != true else { return }
+                    self.settingsController = nil
+                }
             }
             settingsController = controller
         }
@@ -893,7 +936,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 }
             }
             controller.onDidClose = { [weak self] in
-                self?.panel.setGuideActive(false)
+                guard let self else { return }
+                self.panel.setGuideActive(false)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.guideController?.window?.isVisible != true else { return }
+                    self.guideController = nil
+                }
             }
             guideController = controller
         }

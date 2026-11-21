@@ -41,11 +41,18 @@ public final class NoteLibraryStore: @unchecked Sendable {
     private let useStarterIfEmpty: Bool
     private let ioQueue = DispatchQueue(label: "com.notecast.notelibrary", qos: .utility)
 
+    private static let maxCachedNoteBodies = 24
+    private static let maxRetryAttempts = 3
+    private static let retryDelay: TimeInterval = 2.0
+
     private var index = IndexFile(notes: [], lastOpenedNoteID: nil)
+    private var indexDirty = false
     private var lastSavedByID: [UUID: String] = [:]
-    private var pendingNoteID: UUID?
-    private var pendingContent: String?
+    private var lastSavedAccessOrder: [UUID] = []
+    private var searchSessionCache: [UUID: String] = [:]
+    private var pendingByID: [UUID: String] = [:]
     private var pendingWorkItem: DispatchWorkItem?
+    private var retryAttempts = 0
 
     private static let leadingMarkdownPrefixRegex = try! NSRegularExpression(
         pattern: #"^(?:#{1,6}\s+|>\s*|[-*+]\s+\[[ xX]\]\s*|[-*+]\s+|\d+\.\s+)+"#
@@ -77,19 +84,45 @@ public final class NoteLibraryStore: @unchecked Sendable {
         }
     }
 
-    /// Extracts a clean title and 1-line preview from Markdown content.
+    /// Extracts a clean title and 1-line preview from Markdown content in O(1) time.
     public static func extractTitleAndPreview(from content: String) -> (title: String, preview: String) {
-        let nonEmptyLines = content
-            .components(separatedBy: .newlines)
-            .map { cleanMarkdownLine($0) }
-            .filter { !$0.isEmpty }
+        var rawTitle: String?
+        var rawPreview: String?
 
-        let rawTitle = nonEmptyLines.first ?? ""
-        let title = rawTitle.isEmpty ? "Untitled Note" : truncate(rawTitle, maxLength: 80)
+        content.enumerateLines { line, stop in
+            let trimmedLeading = line.drop(while: \.isWhitespace)
+            guard !trimmedLeading.isEmpty else { return }
 
-        let rawPreview = nonEmptyLines.count > 1 ? nonEmptyLines[1] : ""
-        let preview = truncate(rawPreview, maxLength: 100)
+            let snippet = cappedLineSnippet(trimmedLeading, maxUTF16Units: 400)
+            let cleaned = cleanMarkdownLine(snippet)
+            guard !cleaned.isEmpty else { return }
+
+            if rawTitle == nil {
+                rawTitle = cleaned
+            } else {
+                rawPreview = cleaned
+                stop = true
+            }
+        }
+
+        let title = (rawTitle?.isEmpty == false) ? truncate(rawTitle!, maxLength: 80) : "Untitled Note"
+        let preview = truncate(rawPreview ?? "", maxLength: 100)
         return (title, preview)
+    }
+
+    private static func cappedLineSnippet(_ slice: Substring, maxUTF16Units: Int) -> String {
+        guard var limitUTF16 = slice.utf16.index(
+            slice.utf16.startIndex,
+            offsetBy: maxUTF16Units,
+            limitedBy: slice.utf16.endIndex
+        ) else {
+            return String(slice)
+        }
+        while limitUTF16 > slice.startIndex, limitUTF16.samePosition(in: slice.base) == nil {
+            limitUTF16 = slice.utf16.index(before: limitUTF16)
+        }
+        let safeIdx = limitUTF16.samePosition(in: slice.base) ?? slice.startIndex
+        return String(slice[..<safeIdx])
     }
 
     /// Returns all notes sorted by `updatedAt` descending.
@@ -130,15 +163,19 @@ public final class NoteLibraryStore: @unchecked Sendable {
     /// Loads the UTF-8 content for `id`, preferring any unsaved pending buffer.
     public func loadContent(for id: UUID) -> String {
         ioQueue.sync {
-            if pendingNoteID == id, let pendingContent {
-                return pendingContent
+            if let pending = pendingByID[id] {
+                return pending
+            }
+            if let cached = lastSavedByID[id] {
+                touchCachedNoteOnQueue(id)
+                return cached
             }
             let url = noteFileURL(for: id)
             guard let data = try? Data(contentsOf: url) else {
                 return ""
             }
             let text = String(decoding: data, as: UTF8.self)
-            lastSavedByID[id] = text
+            cacheSavedContentOnQueue(text, for: id)
             return text
         }
     }
@@ -158,7 +195,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
     @discardableResult
     public func createNote(initialContent: String = "") throws -> NoteMetadata {
         try ioQueue.sync {
-            try flushPendingOnQueue()
+            try flushPendingOnQueue(writeIndexImmediately: true)
             return try createNoteOnQueue(initialContent: initialContent)
         }
     }
@@ -167,20 +204,21 @@ public final class NoteLibraryStore: @unchecked Sendable {
     @discardableResult
     public func deleteNote(id: UUID) throws -> NoteMetadata {
         try ioQueue.sync {
-            if pendingNoteID == id {
+            pendingByID.removeValue(forKey: id)
+            if pendingByID.isEmpty {
                 pendingWorkItem?.cancel()
                 pendingWorkItem = nil
-                pendingNoteID = nil
-                pendingContent = nil
+                retryAttempts = 0
             } else {
-                try flushPendingOnQueue()
+                try flushPendingOnQueue(writeIndexImmediately: true)
             }
 
             let fileURL = noteFileURL(for: id)
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 try FileManager.default.removeItem(at: fileURL)
             }
-            lastSavedByID.removeValue(forKey: id)
+            evictCachedNoteOnQueue(id)
+            searchSessionCache.removeValue(forKey: id)
             index.notes.removeAll { $0.id == id }
 
             let nextNote: NoteMetadata
@@ -196,44 +234,39 @@ public final class NoteLibraryStore: @unchecked Sendable {
         }
     }
 
-    /// Schedules a debounced atomic write of `<noteID>.md` and `index.json`.
+    /// Schedules a debounced atomic write of `<noteID>.md` (and `index.json` when title/preview changes).
     public func scheduleSave(
         noteID: UUID,
         content: String,
         delay: TimeInterval = 0.4,
-        onSaved: (@Sendable (NoteMetadata) -> Void)? = nil
+        onSaved: (@Sendable (NoteMetadata) -> Void)? = nil,
+        onError: (@Sendable (Error) -> Void)? = nil
     ) {
         ioQueue.async { [weak self] in
             guard let self else { return }
 
-            if let existingID = self.pendingNoteID, existingID != noteID {
-                try? self.flushPendingOnQueue()
+            // Flush any other pending notes first without discarding their buffers if a write fails.
+            let otherIDs = self.pendingByID.keys.filter { $0 != noteID }
+            for otherID in otherIDs {
+                guard let otherText = self.pendingByID[otherID] else { continue }
+                do {
+                    _ = try self.persistNoteOnQueue(id: otherID, content: otherText, writeIndexImmediately: true)
+                    self.pendingByID.removeValue(forKey: otherID)
+                } catch {
+                    onError?(error)
+                }
             }
 
             self.pendingWorkItem?.cancel()
-            self.pendingNoteID = noteID
-            self.pendingContent = content
+            self.pendingByID[noteID] = content
+            self.retryAttempts = 0
 
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                guard let targetID = self.pendingNoteID, let textToWrite = self.pendingContent else {
-                    return
-                }
-                self.pendingWorkItem = nil
-                self.pendingNoteID = nil
-                self.pendingContent = nil
-
-                do {
-                    let updated = try self.persistNoteOnQueue(id: targetID, content: textToWrite)
-                    onSaved?(updated)
-                } catch {
-                    self.pendingNoteID = targetID
-                    self.pendingContent = textToWrite
-                }
-            }
-
-            self.pendingWorkItem = workItem
-            self.ioQueue.asyncAfter(deadline: .now() + max(0, delay), execute: workItem)
+            self.schedulePendingFlushOnQueue(
+                primaryNoteID: noteID,
+                delay: max(0, delay),
+                onSaved: onSaved,
+                onError: onError
+            )
         }
     }
 
@@ -242,16 +275,24 @@ public final class NoteLibraryStore: @unchecked Sendable {
         try ioQueue.sync {
             pendingWorkItem?.cancel()
             pendingWorkItem = nil
+            retryAttempts = 0
 
             if let noteID, let content {
-                if let existingID = pendingNoteID, existingID != noteID {
-                    try flushPendingOnQueue()
-                }
-                pendingNoteID = noteID
-                pendingContent = content
+                pendingByID[noteID] = content
             }
 
-            try flushPendingOnQueue()
+            try flushPendingOnQueue(writeIndexImmediately: true)
+
+            if indexDirty {
+                try writeIndexAtomicallyOnQueue()
+            }
+        }
+    }
+
+    /// Drops ephemeral note bodies loaded during a Command Palette search session.
+    public func clearSearchCache() {
+        ioQueue.async { [weak self] in
+            self?.searchSessionCache.removeAll(keepingCapacity: false)
         }
     }
 
@@ -280,13 +321,15 @@ public final class NoteLibraryStore: @unchecked Sendable {
                 }
 
                 let body: String
-                if pendingNoteID == note.id, let pendingContent {
-                    body = pendingContent
+                if let pending = pendingByID[note.id] {
+                    body = pending
                 } else if let cached = lastSavedByID[note.id] {
                     body = cached
+                } else if let sessionCached = searchSessionCache[note.id] {
+                    body = sessionCached
                 } else if let data = try? Data(contentsOf: noteFileURL(for: note.id)) {
                     let loaded = String(decoding: data, as: UTF8.self)
-                    lastSavedByID[note.id] = loaded
+                    searchSessionCache[note.id] = loaded
                     body = loaded
                 } else {
                     body = ""
@@ -313,6 +356,93 @@ public final class NoteLibraryStore: @unchecked Sendable {
     }
 
     // MARK: - Queue-Internal Implementation
+
+    private func schedulePendingFlushOnQueue(
+        primaryNoteID: UUID,
+        delay: TimeInterval,
+        onSaved: (@Sendable (NoteMetadata) -> Void)?,
+        onError: (@Sendable (Error) -> Void)?
+    ) {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingWorkItem = nil
+            guard !self.pendingByID.isEmpty else { return }
+
+            var savedPrimary: NoteMetadata?
+            var firstError: Error?
+
+            for id in Array(self.pendingByID.keys) {
+                guard let textToWrite = self.pendingByID[id] else { continue }
+                do {
+                    let updated = try self.persistNoteOnQueue(
+                        id: id,
+                        content: textToWrite,
+                        writeIndexImmediately: false
+                    )
+                    self.pendingByID.removeValue(forKey: id)
+                    if id == primaryNoteID {
+                        savedPrimary = updated
+                    }
+                } catch {
+                    if firstError == nil {
+                        firstError = error
+                    }
+                }
+            }
+
+            if let firstError {
+                onError?(firstError)
+                if !self.pendingByID.isEmpty && self.retryAttempts < Self.maxRetryAttempts {
+                    self.retryAttempts += 1
+                    self.schedulePendingFlushOnQueue(
+                        primaryNoteID: primaryNoteID,
+                        delay: Self.retryDelay,
+                        onSaved: onSaved,
+                        onError: onError
+                    )
+                }
+            } else {
+                self.retryAttempts = 0
+                if let savedPrimary {
+                    onSaved?(savedPrimary)
+                }
+            }
+        }
+
+        pendingWorkItem = workItem
+        ioQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func cacheSavedContentOnQueue(_ content: String, for id: UUID) {
+        lastSavedByID[id] = content
+        searchSessionCache.removeValue(forKey: id)
+        touchCachedNoteOnQueue(id)
+        trimSavedCacheIfNeededOnQueue()
+    }
+
+    private func touchCachedNoteOnQueue(_ id: UUID) {
+        if let idx = lastSavedAccessOrder.firstIndex(of: id) {
+            lastSavedAccessOrder.remove(at: idx)
+        }
+        lastSavedAccessOrder.append(id)
+    }
+
+    private func evictCachedNoteOnQueue(_ id: UUID) {
+        lastSavedByID.removeValue(forKey: id)
+        lastSavedAccessOrder.removeAll { $0 == id }
+    }
+
+    private func trimSavedCacheIfNeededOnQueue() {
+        while lastSavedByID.count > Self.maxCachedNoteBodies {
+            guard let evictIdx = lastSavedAccessOrder.firstIndex(where: { candidate in
+                candidate != index.lastOpenedNoteID && pendingByID[candidate] == nil
+            }) else {
+                break
+            }
+            let evictedID = lastSavedAccessOrder.remove(at: evictIdx)
+            lastSavedByID.removeValue(forKey: evictedID)
+        }
+    }
 
     private func loadOrInitializeIndexOnQueue() {
         let fm = FileManager.default
@@ -363,11 +493,31 @@ public final class NoteLibraryStore: @unchecked Sendable {
             changed = true
         }
 
+        // Refresh metadata for known notes if their .md file was modified more recently than index.json
+        // (for example, if a prior session terminated between an atomic .md write and an index flush).
+        for idx in index.notes.indices {
+            let note = index.notes[idx]
+            guard let fileURL = mdByID[note.id],
+                  let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let mtime = values.contentModificationDate,
+                  mtime.timeIntervalSince(note.updatedAt) > 1.5
+            else {
+                continue
+            }
+
+            let data = (try? Data(contentsOf: fileURL)) ?? Data()
+            let content = String(decoding: data, as: UTF8.self)
+            let extracted = Self.extractTitleAndPreview(from: content)
+            index.notes[idx].title = extracted.title
+            index.notes[idx].preview = extracted.preview
+            index.notes[idx].updatedAt = mtime
+            changed = true
+        }
+
         let knownIDs = Set(index.notes.map(\.id))
         for (id, fileURL) in mdByID where !knownIDs.contains(id) {
             let data = (try? Data(contentsOf: fileURL)) ?? Data()
             let content = String(decoding: data, as: UTF8.self)
-            lastSavedByID[id] = content
             let extracted = Self.extractTitleAndPreview(from: content)
             let values = try? fileURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
             let created = values?.creationDate ?? Date()
@@ -411,26 +561,39 @@ public final class NoteLibraryStore: @unchecked Sendable {
 
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         try Data(initialContent.utf8).write(to: noteFileURL(for: id), options: [.atomic])
-        lastSavedByID[id] = initialContent
-
         index.notes.insert(meta, at: 0)
         index.lastOpenedNoteID = id
+        cacheSavedContentOnQueue(initialContent, for: id)
         try writeIndexAtomicallyOnQueue()
         return meta
     }
 
-    private func flushPendingOnQueue() throws {
-        guard let noteID = pendingNoteID, let content = pendingContent else {
-            pendingNoteID = nil
-            pendingContent = nil
-            return
+    private func flushPendingOnQueue(writeIndexImmediately: Bool) throws {
+        guard !pendingByID.isEmpty else { return }
+
+        var firstError: Error?
+        for id in Array(pendingByID.keys) {
+            guard let content = pendingByID[id] else { continue }
+            do {
+                _ = try persistNoteOnQueue(id: id, content: content, writeIndexImmediately: writeIndexImmediately)
+                pendingByID.removeValue(forKey: id)
+            } catch {
+                if firstError == nil {
+                    firstError = error
+                }
+            }
         }
-        _ = try persistNoteOnQueue(id: noteID, content: content)
-        pendingNoteID = nil
-        pendingContent = nil
+
+        if let firstError {
+            throw firstError
+        }
     }
 
-    private func persistNoteOnQueue(id: UUID, content: String) throws -> NoteMetadata {
+    private func persistNoteOnQueue(
+        id: UUID,
+        content: String,
+        writeIndexImmediately: Bool
+    ) throws -> NoteMetadata {
         let extracted = Self.extractTitleAndPreview(from: content)
         let now = Date()
 
@@ -438,12 +601,13 @@ public final class NoteLibraryStore: @unchecked Sendable {
         if !alreadySaved {
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             try Data(content.utf8).write(to: noteFileURL(for: id), options: [.atomic])
-            lastSavedByID[id] = content
+            cacheSavedContentOnQueue(content, for: id)
         }
 
         if let idx = index.notes.firstIndex(where: { $0.id == id }) {
             var meta = index.notes[idx]
-            let metaChanged = meta.title != extracted.title || meta.preview != extracted.preview || !alreadySaved
+            let titleOrPreviewChanged = meta.title != extracted.title || meta.preview != extracted.preview
+            let metaChanged = titleOrPreviewChanged || !alreadySaved
             if metaChanged {
                 meta.title = extracted.title
                 meta.preview = extracted.preview
@@ -451,7 +615,11 @@ public final class NoteLibraryStore: @unchecked Sendable {
                     meta.updatedAt = now
                 }
                 index.notes[idx] = meta
-                try writeIndexAtomicallyOnQueue()
+                if writeIndexImmediately || titleOrPreviewChanged {
+                    try writeIndexAtomicallyOnQueue()
+                } else {
+                    indexDirty = true
+                }
             }
             return meta
         } else {
@@ -473,6 +641,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let data = try makeEncoder().encode(index)
         try data.write(to: indexURL, options: [.atomic])
+        indexDirty = false
     }
 
     private func noteFileURL(for id: UUID) -> URL {
@@ -493,7 +662,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
 
     private func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }

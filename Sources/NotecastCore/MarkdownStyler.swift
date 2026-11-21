@@ -14,9 +14,37 @@ public final class MarkdownStyler {
         ("Helvetica Neue", "Helvetica Neue")
     ]
 
-    public var baseFontSize: CGFloat
-    public var fontFamily: String
+    private struct TraitFontKey: Hashable {
+        let fontName: String
+        let pointSizeBits: UInt
+        let traitRaw: UInt
+    }
+
+    public var baseFontSize: CGFloat {
+        didSet {
+            if baseFontSize != oldValue {
+                invalidateStyleCaches()
+            }
+        }
+    }
+
+    public var fontFamily: String {
+        didSet {
+            if fontFamily != oldValue {
+                invalidateStyleCaches()
+            }
+        }
+    }
+
     public var accentColor: NSColor
+
+    private let baseParagraphStyle: NSParagraphStyle
+    private var cachedBaseFont: NSFont?
+    private var cachedMonoFont: NSFont?
+    private var cachedHeadingFonts: [Int: NSFont] = [:]
+    private var cachedTraitFonts: [TraitFontKey: NSFont] = [:]
+    private var cachedHangingIndentStyles: [Int: NSParagraphStyle] = [:]
+    private var cachedPrefixWidths: [String: CGFloat] = [:]
 
     private let headingRegex = try! NSRegularExpression(pattern: #"^(#{1,4})\s+(.+)$"#)
     private let blockquoteRegex = try! NSRegularExpression(pattern: #"^(\s*>\s?)(.*)$"#)
@@ -40,6 +68,65 @@ public final class MarkdownStyler {
         self.baseFontSize = baseFontSize
         self.fontFamily = fontFamily
         self.accentColor = accentColor
+
+        let mutableBase = NSMutableParagraphStyle()
+        mutableBase.lineSpacing = 3.5
+        mutableBase.lineBreakMode = .byWordWrapping
+        self.baseParagraphStyle = mutableBase.copy() as! NSParagraphStyle
+    }
+
+    private func invalidateStyleCaches() {
+        cachedBaseFont = nil
+        cachedMonoFont = nil
+        cachedHeadingFonts.removeAll(keepingCapacity: true)
+        cachedTraitFonts.removeAll(keepingCapacity: true)
+        cachedPrefixWidths.removeAll(keepingCapacity: true)
+    }
+
+    private func resolvedBaseFont() -> NSFont {
+        if let cachedBaseFont {
+            return cachedBaseFont
+        }
+        let font = Self.resolveFont(family: fontFamily, size: baseFontSize)
+        cachedBaseFont = font
+        return font
+    }
+
+    private func resolvedMonoFont() -> NSFont {
+        if let cachedMonoFont {
+            return cachedMonoFont
+        }
+        let font = NSFont.monospacedSystemFont(ofSize: max(10, baseFontSize - 1), weight: .regular)
+        cachedMonoFont = font
+        return font
+    }
+
+    private func resolvedHeadingFont(level: Int) -> NSFont {
+        if let cached = cachedHeadingFonts[level] {
+            return cached
+        }
+        let delta: CGFloat = switch level {
+        case 1: 6
+        case 2: 4
+        case 3: 2
+        default: 1
+        }
+        let weight: NSFont.Weight = level <= 2 ? .bold : .semibold
+        let font = Self.resolveFont(family: fontFamily, size: baseFontSize + delta, weight: weight)
+        cachedHeadingFonts[level] = font
+        return font
+    }
+
+    private func measuredPrefixWidth(_ prefix: String, font: NSFont) -> CGFloat {
+        if let cached = cachedPrefixWidths[prefix] {
+            return cached
+        }
+        let width = (prefix as NSString).size(withAttributes: [.font: font]).width
+        if cachedPrefixWidths.count >= 256 {
+            cachedPrefixWidths.removeAll(keepingCapacity: true)
+        }
+        cachedPrefixWidths[prefix] = width
+        return width
     }
 
     public static func resolveFont(
@@ -100,14 +187,10 @@ public final class MarkdownStyler {
     }
 
     public func baseAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3.5
-        paragraph.lineBreakMode = .byWordWrapping
-
-        return [
-            .font: Self.resolveFont(family: fontFamily, size: baseFontSize),
+        [
+            .font: resolvedBaseFont(),
             .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph
+            .paragraphStyle: baseParagraphStyle
         ]
     }
 
@@ -127,14 +210,15 @@ public final class MarkdownStyler {
         let clampedLen = min(max(0, targetRange.length), totalLength - clampedLoc)
         let clampedRange = NSRange(location: clampedLoc, length: clampedLen)
 
-        let nsString = storage.string as NSString
+        let text = storage.string
+        let nsString = text as NSString
         let paragraphRange = nsString.paragraphRange(for: clampedRange)
         guard paragraphRange.length > 0 else { return }
 
         let defaults = baseAttributes()
         storage.setAttributes(defaults, range: paragraphRange)
 
-        let baseFont = (defaults[.font] as? NSFont) ?? Self.resolveFont(family: fontFamily, size: baseFontSize)
+        let baseFont = resolvedBaseFont()
         var nonInlineLineRanges: [NSRange] = []
 
         var index = paragraphRange.location
@@ -143,7 +227,13 @@ public final class MarkdownStyler {
             let fullLineRange = nsString.lineRange(for: NSRange(location: index, length: 0))
             let contentRange = trimmedLineRange(fullLineRange, in: nsString)
             if contentRange.length > 0 {
-                let isFence = styleLine(storage, nsString: nsString, lineRange: contentRange, baseFont: baseFont)
+                let isFence = styleLine(
+                    storage,
+                    text: text,
+                    nsString: nsString,
+                    lineRange: contentRange,
+                    baseFont: baseFont
+                )
                 if isFence {
                     nonInlineLineRanges.append(contentRange)
                 }
@@ -153,7 +243,7 @@ public final class MarkdownStyler {
             index = nextIndex
         }
 
-        styleInlineElements(storage, nsString: nsString, in: paragraphRange, skipping: nonInlineLineRanges)
+        styleInlineElements(storage, text: text, in: paragraphRange, skipping: nonInlineLineRanges)
     }
 
     // MARK: - Line-Level Rules
@@ -161,12 +251,13 @@ public final class MarkdownStyler {
     @discardableResult
     private func styleLine(
         _ storage: NSTextStorage,
+        text: String,
         nsString: NSString,
         lineRange: NSRange,
         baseFont: NSFont
     ) -> Bool {
-        if fenceRegex.firstMatch(in: storage.string, range: lineRange) != nil {
-            let mono = NSFont.monospacedSystemFont(ofSize: max(10, baseFontSize - 1), weight: .regular)
+        if fenceRegex.firstMatch(in: text, range: lineRange) != nil {
+            let mono = resolvedMonoFont()
             storage.addAttributes(
                 [
                     .font: mono,
@@ -177,24 +268,17 @@ public final class MarkdownStyler {
             return true
         }
 
-        if let match = headingRegex.firstMatch(in: storage.string, range: lineRange) {
+        if let match = headingRegex.firstMatch(in: text, range: lineRange) {
             let hashesRange = match.range(at: 1)
             let level = hashesRange.length
-            let delta: CGFloat = switch level {
-            case 1: 6
-            case 2: 4
-            case 3: 2
-            default: 1
-            }
-            let weight: NSFont.Weight = level <= 2 ? .bold : .semibold
-            let headingFont = Self.resolveFont(family: fontFamily, size: baseFontSize + delta, weight: weight)
+            let headingFont = resolvedHeadingFont(level: level)
 
             storage.addAttribute(.font, value: headingFont, range: lineRange)
             storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: hashesRange)
             return false
         }
 
-        if let match = blockquoteRegex.firstMatch(in: storage.string, range: lineRange) {
+        if let match = blockquoteRegex.firstMatch(in: text, range: lineRange) {
             let markerRange = match.range(at: 1)
             let bodyRange = match.range(at: 2)
 
@@ -209,13 +293,12 @@ public final class MarkdownStyler {
                     range: bodyRange
                 )
             }
-            let prefixWidth = (nsString.substring(with: markerRange) as NSString)
-                .size(withAttributes: [.font: baseFont]).width
+            let prefixWidth = measuredPrefixWidth(nsString.substring(with: markerRange), font: baseFont)
             applyHangingIndent(max(14, prefixWidth), to: storage, range: lineRange)
             return false
         }
 
-        if let match = checklistRegex.firstMatch(in: storage.string, range: lineRange) {
+        if let match = checklistRegex.firstMatch(in: text, range: lineRange) {
             let indentRange = match.range(at: 1)
             let markerRange = match.range(at: 2)
             let stateRange = match.range(at: 3)
@@ -226,8 +309,7 @@ public final class MarkdownStyler {
             let prefixEnd = NSMaxRange(markerRange)
             let prefixPlusSpaceLen = min(NSMaxRange(lineRange) - lineRange.location, (prefixEnd - lineRange.location) + 1)
             let prefixRange = NSRange(location: lineRange.location, length: prefixPlusSpaceLen)
-            let prefixWidth = (nsString.substring(with: prefixRange) as NSString)
-                .size(withAttributes: [.font: baseFont]).width
+            let prefixWidth = measuredPrefixWidth(nsString.substring(with: prefixRange), font: baseFont)
             applyHangingIndent(max(20, prefixWidth), to: storage, range: lineRange)
             _ = indentRange
 
@@ -244,14 +326,13 @@ public final class MarkdownStyler {
             return false
         }
 
-        if let match = listRegex.firstMatch(in: storage.string, range: lineRange) {
+        if let match = listRegex.firstMatch(in: text, range: lineRange) {
             let markerRange = match.range(at: 2)
             storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: markerRange)
 
             let prefixEnd = min(NSMaxRange(lineRange), NSMaxRange(markerRange) + 1)
             let prefixRange = NSRange(location: lineRange.location, length: prefixEnd - lineRange.location)
-            let prefixWidth = (nsString.substring(with: prefixRange) as NSString)
-                .size(withAttributes: [.font: baseFont]).width
+            let prefixWidth = measuredPrefixWidth(nsString.substring(with: prefixRange), font: baseFont)
             applyHangingIndent(max(16, prefixWidth), to: storage, range: lineRange)
             return false
         }
@@ -263,20 +344,19 @@ public final class MarkdownStyler {
 
     private func styleInlineElements(
         _ storage: NSTextStorage,
-        nsString: NSString,
+        text: String,
         in range: NSRange,
         skipping skippedLineRanges: [NSRange]
     ) {
-        let string = storage.string
         var codeRanges: [NSRange] = []
 
         // 1. Inline code
-        for match in inlineCodeRegex.matches(in: string, range: range) {
+        for match in inlineCodeRegex.matches(in: text, range: range) {
             let fullRange = match.range(at: 1)
             guard !overlapsAny(fullRange, in: skippedLineRanges), fullRange.length >= 2 else { continue }
             codeRanges.append(fullRange)
 
-            let monoFont = NSFont.monospacedSystemFont(ofSize: max(10, baseFontSize - 1), weight: .regular)
+            let monoFont = resolvedMonoFont()
             storage.addAttributes(
                 [
                     .font: monoFont,
@@ -290,7 +370,7 @@ public final class MarkdownStyler {
         let protectedRanges = skippedLineRanges + codeRanges
 
         // 2. Bold + Italic (***text***)
-        for match in boldItalicRegex.matches(in: string, range: range) {
+        for match in boldItalicRegex.matches(in: text, range: range) {
             let fullRange = match.range(at: 1)
             guard !overlapsAny(fullRange, in: protectedRanges), fullRange.length > 6 else { continue }
             applyTrait(.boldFontMask, to: storage, range: fullRange)
@@ -299,7 +379,7 @@ public final class MarkdownStyler {
         }
 
         // 3. Bold (**text** or __text__)
-        for match in boldRegex.matches(in: string, range: range) {
+        for match in boldRegex.matches(in: text, range: range) {
             let fullRange = match.range
             guard !overlapsAny(fullRange, in: protectedRanges), fullRange.length > 4 else { continue }
             applyTrait(.boldFontMask, to: storage, range: fullRange)
@@ -307,7 +387,7 @@ public final class MarkdownStyler {
         }
 
         // 4. Italic (*text* or _text_)
-        for match in italicRegex.matches(in: string, range: range) {
+        for match in italicRegex.matches(in: text, range: range) {
             let fullRange = match.range(at: 1)
             guard !overlapsAny(fullRange, in: protectedRanges), fullRange.length > 2 else { continue }
             applyTrait(.italicFontMask, to: storage, range: fullRange)
@@ -315,7 +395,7 @@ public final class MarkdownStyler {
         }
 
         // 5. Strikethrough (~~text~~)
-        for match in strikethroughRegex.matches(in: string, range: range) {
+        for match in strikethroughRegex.matches(in: text, range: range) {
             let fullRange = match.range(at: 1)
             guard !overlapsAny(fullRange, in: protectedRanges), fullRange.length > 4 else { continue }
             let innerRange = NSRange(location: fullRange.location + 2, length: fullRange.length - 4)
@@ -328,16 +408,27 @@ public final class MarkdownStyler {
             )
             dimMarkers(in: storage, fullRange: fullRange, markerLength: 2)
         }
-        _ = nsString
     }
 
     // MARK: - Attribute Helpers
 
     private func applyHangingIndent(_ indent: CGFloat, to storage: NSTextStorage, range: NSRange) {
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = 3.5
-        style.lineBreakMode = .byWordWrapping
-        style.headIndent = indent
+        let bucket = Int((indent * 2).rounded())
+        let style: NSParagraphStyle
+        if let cached = cachedHangingIndentStyles[bucket] {
+            style = cached
+        } else {
+            let mutable = NSMutableParagraphStyle()
+            mutable.lineSpacing = 3.5
+            mutable.lineBreakMode = .byWordWrapping
+            mutable.headIndent = CGFloat(bucket) / 2.0
+            let immutable = mutable.copy() as! NSParagraphStyle
+            if cachedHangingIndentStyles.count >= 128 {
+                cachedHangingIndentStyles.removeAll(keepingCapacity: true)
+            }
+            cachedHangingIndentStyles[bucket] = immutable
+            style = immutable
+        }
         storage.addAttribute(.paragraphStyle, value: style, range: range)
     }
 
@@ -350,14 +441,24 @@ public final class MarkdownStyler {
     }
 
     private func applyTrait(_ trait: NSFontTraitMask, to storage: NSTextStorage, range: NSRange) {
+        let fallbackFont = resolvedBaseFont()
         storage.enumerateAttribute(.font, in: range, options: []) { value, subRange, _ in
-            let current = (value as? NSFont) ?? Self.resolveFont(family: fontFamily, size: baseFontSize)
+            let current = (value as? NSFont) ?? fallbackFont
             let updated = font(current, withTrait: trait)
             storage.addAttribute(.font, value: updated, range: subRange)
         }
     }
 
     private func font(_ source: NSFont, withTrait trait: NSFontTraitMask) -> NSFont {
+        let key = TraitFontKey(
+            fontName: source.fontName,
+            pointSizeBits: UInt(source.pointSize.bitPattern),
+            traitRaw: trait.rawValue
+        )
+        if let cached = cachedTraitFonts[key] {
+            return cached
+        }
+
         let converted = NSFontManager.shared.convert(source, toHaveTrait: trait)
         let wantedSymbolic: NSFontDescriptor.SymbolicTraits = switch trait {
         case .boldFontMask: .bold
@@ -365,14 +466,20 @@ public final class MarkdownStyler {
         default: []
         }
 
+        let resolved: NSFont
         if !wantedSymbolic.isEmpty && !converted.fontDescriptor.symbolicTraits.contains(wantedSymbolic) {
             let combined = source.fontDescriptor.symbolicTraits.union(wantedSymbolic)
             let descriptor = source.fontDescriptor.withSymbolicTraits(combined)
-            if let fallback = NSFont(descriptor: descriptor, size: source.pointSize) {
-                return fallback
-            }
+            resolved = NSFont(descriptor: descriptor, size: source.pointSize) ?? converted
+        } else {
+            resolved = converted
         }
-        return converted
+
+        if cachedTraitFonts.count >= 64 {
+            cachedTraitFonts.removeAll(keepingCapacity: true)
+        }
+        cachedTraitFonts[key] = resolved
+        return resolved
     }
 
     private func trimmedLineRange(_ lineRange: NSRange, in nsString: NSString) -> NSRange {

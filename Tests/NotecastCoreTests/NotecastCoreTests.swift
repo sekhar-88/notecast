@@ -324,6 +324,42 @@ struct MarkdownStylerTests {
         #expect(baseStyle?.lineBreakMode == .byWordWrapping)
         #expect(listStyle?.lineBreakMode == .byWordWrapping)
     }
+
+    @Test("Font and size updates invalidate styler caches and restyle cleanly")
+    func stylerCacheInvalidation() {
+        let styler = MarkdownStyler(baseFontSize: 14, fontFamily: "system")
+        let storage = NSTextStorage(string: "# Heading\n- **Bold** *italic* `code`")
+        styler.styleAll(storage)
+
+        let h1Before = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        #expect(h1Before?.pointSize == 20)
+
+        styler.baseFontSize = 18
+        styler.fontFamily = "Menlo"
+        styler.styleAll(storage)
+
+        let h1After = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        let bodyFont = styler.baseAttributes()[.font] as? NSFont
+        #expect(h1After?.pointSize == 24)
+        #expect(bodyFont?.familyName == "Menlo")
+        #expect(bodyFont?.pointSize == 18)
+    }
+
+    @Test("Large Markdown document styles cleanly without quadratic slowdown")
+    func largeDocumentStyling() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let block = "# Section\n- [ ] Check **bold** and *italic* with `code`\n> Quoted line\nPlain text line\n\n"
+        let doc = String(repeating: block, count: 400)
+        let storage = NSTextStorage(string: doc)
+        styler.styleAll(storage)
+
+        let firstHashColor = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        #expect(firstHashColor == .tertiaryLabelColor)
+
+        let tailIdx = max(0, storage.length - 5)
+        let tailFont = storage.attribute(.font, at: tailIdx, effectiveRange: nil) as? NSFont
+        #expect(tailFont?.pointSize == 14)
+    }
 }
 
 @Suite("WindowFrameClamper")
@@ -521,6 +557,119 @@ struct NoteLibraryStoreTests {
 
         let results = store.searchNotes(query: "NEON")
         #expect(results.map(\.id) == [titleMatch.id, bodyMatch.id])
+    }
+
+    @Test("Title extraction caps huge lines safely including emoji surrogate pairs")
+    func titleExtractionCapsHugeLines() {
+        let hugeLine = "# " + String(repeating: "🚀", count: 500) + " tail"
+        let secondLine = String(repeating: "a", count: 2_000)
+        let extracted = NoteLibraryStore.extractTitleAndPreview(from: "\(hugeLine)\n\(secondLine)")
+        #expect(extracted.title.count <= 80)
+        #expect(extracted.title.hasPrefix("🚀"))
+        #expect(extracted.preview.count <= 100)
+        #expect(extracted.preview.hasPrefix("aaaa"))
+    }
+
+    @Test("Debounced save defers index.json rewrite when title/preview unchanged and flushes on flushSync")
+    func deferredIndexWriteAndFlush() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let indexURL = notesDir.appendingPathComponent("index.json")
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+
+        let note = try store.createNote(initialContent: "# Title\nPreview line\nBody v1")
+        let indexDataBefore = try Data(contentsOf: indexURL)
+        // Compact JSON (no pretty-printing)
+        #expect(!String(decoding: indexDataBefore, as: UTF8.self).contains("\n"))
+
+        // Edit body only (title & preview unchanged): debounced save writes .md but skips index.json rewrite
+        let updatedBody = "# Title\nPreview line\nBody v2"
+        await withCheckedContinuation { continuation in
+            store.scheduleSave(noteID: note.id, content: updatedBody, delay: 0.03) { _ in
+                continuation.resume()
+            }
+        }
+
+        let mdURL = notesDir.appendingPathComponent("\(note.id.uuidString).md")
+        #expect(try String(contentsOf: mdURL, encoding: .utf8) == updatedBody)
+        #expect(try Data(contentsOf: indexURL) == indexDataBefore)
+
+        // flushSync writes the deferred index update cleanly
+        try store.flushSync()
+        let reloaded = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        #expect(reloaded.loadContent(for: note.id) == updatedBody)
+    }
+
+    @Test("Failed save preserves pending buffer and reports error without losing edits")
+    func failedSavePreservesPendingBuffer() async throws {
+        let dir = try makeTempDir()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        let note = try store.createNote(initialContent: "# Draft\nOriginal")
+
+        // Make notes directory read-only to force write failure
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: notesDir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: notesDir.path)
+        }
+
+        let unsavedText = "# Draft\nImportant unsaved edit"
+        let gotError: Bool = await withCheckedContinuation { continuation in
+            store.scheduleSave(
+                noteID: note.id,
+                content: unsavedText,
+                delay: 0.03,
+                onSaved: { _ in continuation.resume(returning: false) },
+                onError: { _ in continuation.resume(returning: true) }
+            )
+        }
+        #expect(gotError)
+        // Pending buffer must still be preserved when loading the note
+        #expect(store.loadContent(for: note.id) == unsavedText)
+
+        // Restore permissions and verify flushSync persists the preserved buffer
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: notesDir.path)
+        try store.flushSync()
+        let reloaded = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        #expect(reloaded.loadContent(for: note.id) == unsavedText)
+    }
+
+    @Test("Search session cache finds uncached notes and clears cleanly without evicting active note")
+    func searchSessionCacheAndActivePinning() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+
+        var createdIDs: [UUID] = []
+        for idx in 0..<30 {
+            let marker = idx == 0 ? "unique_needle_alpha" : "filler_\(idx)"
+            let meta = try store.createNote(initialContent: "# Note \(idx)\nSummary \(idx)\n\(marker)")
+            createdIDs.append(meta.id)
+        }
+
+        // Reload fresh store so none of the 30 bodies are cached yet
+        let reloaded = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        let active = reloaded.lastOpenedNote()
+        let activeUpdatedBefore = active.updatedAt
+
+        let hits = reloaded.searchNotes(query: "unique_needle_alpha")
+        #expect(hits.map(\.id) == [createdIDs[0]])
+        reloaded.clearSearchCache()
+
+        // Loading active note and flushing unchanged content must not bump updatedAt
+        let activeContent = reloaded.loadContent(for: active.id)
+        try reloaded.flushSync(noteID: active.id, content: activeContent)
+        let activeAfter = reloaded.allNotes().first { $0.id == active.id }
+        #expect(activeAfter?.updatedAt == activeUpdatedBefore)
     }
 }
 
