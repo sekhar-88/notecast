@@ -15,6 +15,7 @@ public enum AppCommandID: String, CaseIterable, Sendable {
     case toggleImmersiveBlack
     case toggleNeonGlow
     case cycleNeonAccent
+    case toggleGhostMode
     case toggleAlwaysOnTop
     case toggleFollowSpaces
     case increaseFontSize
@@ -106,6 +107,14 @@ public struct AppCommandDescriptor: Equatable, Sendable {
             shortcut: "",
             symbolName: "paintpalette",
             keywords: ["neon", "color", "accent", "cyan", "violet", "magenta", "emerald", "amber"]
+        ),
+        AppCommandDescriptor(
+            id: .toggleGhostMode,
+            title: "Toggle Ghost Outline When Unfocused",
+            subtitle: "Turn fully transparent with only a subtle outline when inactive",
+            shortcut: "",
+            symbolName: "rectangle.dashed",
+            keywords: ["ghost", "transparent", "outline", "unfocus", "inactive", "clear", "fade"]
         ),
         AppCommandDescriptor(
             id: .toggleAlwaysOnTop,

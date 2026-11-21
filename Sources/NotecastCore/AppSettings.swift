@@ -166,6 +166,7 @@ public final class AppSettings {
         static let neonGlowEnabled = "notecast.neonGlowEnabled"
         static let neonAccent = "notecast.neonAccent"
         static let fontFamily = "notecast.fontFamily"
+        static let ghostOnUnfocus = "notecast.ghostOnUnfocus"
     }
 
     public static let minOpacity: Double = 0.65
@@ -322,6 +323,18 @@ public final class AppSettings {
         set {
             let cleaned = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             defaults.set(cleaned.isEmpty ? "system" : cleaned, forKey: Keys.fontFamily)
+        }
+    }
+
+    public var ghostOnUnfocus: Bool {
+        get {
+            guard defaults.object(forKey: Keys.ghostOnUnfocus) != nil else {
+                return false
+            }
+            return defaults.bool(forKey: Keys.ghostOnUnfocus)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.ghostOnUnfocus)
         }
     }
 

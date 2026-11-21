@@ -2,10 +2,22 @@
 
 An ultra-lightweight, single-process native macOS floating Markdown scratchpad built with Swift 6, AppKit, and Carbon `RegisterEventHotKey` — zero Electron/WebViews, zero helper processes, and no Accessibility permissions required.
 
+## Download
+
+Download the latest Apple Silicon (`.dmg` or `.zip`) build directly from [GitHub Releases](https://github.com/sekhar-88/notecast/releases/latest):
+
+1. Open `Notecast-v*-arm64.dmg` and drag **Notecast** into **Applications** (or unzip `Notecast-v*-arm64.zip`).
+2. Because this release is ad-hoc signed rather than Apple Developer notarized, if macOS Gatekeeper blocks the first open, clear the quarantine attribute once:
+
+```bash
+xattr -cr /Applications/Notecast.app
+```
+
 ## Features
 
 - **Instant Global Hotkey** (`⌥ Space` by default, configurable in Settings) — always opens back into the note view on the last note you were working on
 - **Curated Background Themes & Active Neon Glow**: choose from **Charcoal (Opaque, default)**, **Midnight Slate**, **Warm Espresso**, **Deep Forest**, **Pure Black**, **Warm Paper (Light)**, or **Translucent HUD**, paired with a luminous neon edge glow when focused (Cyan, Violet, Magenta, Emerald, or Amber)
+- **Ghost Outline Mode (Optional)**: turn completely transparent when unfocused — hiding all text and background while keeping a crisp neon reticle outline and top wake pill so windows underneath are 100% readable and clickable
 - **Always-On-Top Floating Panel**: stays above other apps and full-screen Spaces while windows underneath remain interactable
 - **Multi-Note Library & Built-In Search / Command Palette**:
   - `⌘P` opens the Raycast-style search & command palette (search notes or type `>` for commands)

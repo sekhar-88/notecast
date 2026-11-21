@@ -515,6 +515,15 @@ struct CommandPaletteSearchTests {
         let prefixEntries = CommandPaletteSearch.results(query: ">neon", matchingNotes: [sampleNotes[1]], mode: .notesOnly)
         #expect(prefixEntries == [.note(sampleNotes[1])])
     }
+
+    @Test("Ghost outline command matches >ghost query")
+    func ghostCommandSearch() {
+        let entries = CommandPaletteSearch.results(query: ">ghost", matchingNotes: sampleNotes)
+        #expect(entries.contains {
+            if case .command(let cmd) = $0 { return cmd.id == .toggleGhostMode }
+            return false
+        })
+    }
 }
 
 @Suite("AppSettingsAndStyler")
@@ -531,17 +540,20 @@ struct AppSettingsAndStylerTests {
         #expect(settings.neonGlowEnabled == true)
         #expect(settings.neonAccent == .cyan)
         #expect(settings.fontFamily == "system")
+        #expect(settings.ghostOnUnfocus == false)
 
         settings.surfaceStyle = .midnightSlate
         settings.neonGlowEnabled = false
         settings.neonAccent = .magenta
         settings.fontFamily = "system-serif"
+        settings.ghostOnUnfocus = true
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.surfaceStyle == .midnightSlate)
         #expect(reloaded.neonGlowEnabled == false)
         #expect(reloaded.neonAccent == .magenta)
         #expect(reloaded.fontFamily == "system-serif")
+        #expect(reloaded.ghostOnUnfocus == true)
         #expect(SurfaceStyle.warmPaper.isLight)
         #expect(SurfaceStyle.charcoal.isOpaque)
         #expect(!SurfaceStyle.translucentHUD.isOpaque)

@@ -15,6 +15,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onFontSizeChanged: ((CGFloat) -> Void)?
     var onAlwaysOnTopChanged: ((Bool) -> Void)?
     var onFollowAllSpacesChanged: ((Bool) -> Void)?
+    var onGhostOnUnfocusChanged: ((Bool) -> Void)?
     var onRevealNotesFolder: (() -> Void)?
 
     private let settings: AppSettings
@@ -32,6 +33,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let fontSizeValueLabel = NSTextField(labelWithString: "14 pt")
     private let alwaysOnTopCheckbox = NSButton(checkboxWithTitle: "Always on top of other windows", target: nil, action: nil)
     private let followSpacesCheckbox = NSButton(checkboxWithTitle: "Float across all Spaces & full-screen apps", target: nil, action: nil)
+    private let ghostOnUnfocusCheckbox = NSButton(checkboxWithTitle: "Transparent outline when unfocused", target: nil, action: nil)
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Notecast at login", target: nil, action: nil)
     private let launchNoteLabel = NSTextField(labelWithString: "")
 
@@ -41,7 +43,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.hotKeyRecorder = HotKeyRecorderControl(combo: settings.hotKey)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 470, height: 468),
+            contentRect: NSRect(x: 0, y: 0, width: 470, height: 492),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -101,6 +103,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         alwaysOnTopCheckbox.state = settings.alwaysOnTop ? .on : .off
         followSpacesCheckbox.state = settings.followAllSpaces ? .on : .off
+        ghostOnUnfocusCheckbox.state = settings.ghostOnUnfocus ? .on : .off
 
         refreshLaunchAtLoginState()
     }
@@ -194,7 +197,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         grid.addRow(with: [makeTitleLabel("Font Size:"), fontSizeRow])
 
         // 7. Window behavior checkboxes
-        let behaviorStack = NSStackView(views: [alwaysOnTopCheckbox, followSpacesCheckbox])
+        let behaviorStack = NSStackView(views: [alwaysOnTopCheckbox, followSpacesCheckbox, ghostOnUnfocusCheckbox])
         behaviorStack.orientation = .vertical
         behaviorStack.alignment = .leading
         behaviorStack.spacing = 6
@@ -314,6 +317,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         followSpacesCheckbox.target = self
         followSpacesCheckbox.action = #selector(handleFollowSpacesToggled)
 
+        ghostOnUnfocusCheckbox.target = self
+        ghostOnUnfocusCheckbox.action = #selector(handleGhostOnUnfocusToggled)
+
         launchAtLoginCheckbox.target = self
         launchAtLoginCheckbox.action = #selector(handleLaunchAtLoginToggled)
     }
@@ -378,6 +384,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func handleFollowSpacesToggled() {
         onFollowAllSpacesChanged?(followSpacesCheckbox.state == .on)
+    }
+
+    @objc private func handleGhostOnUnfocusToggled() {
+        onGhostOnUnfocusChanged?(ghostOnUnfocusCheckbox.state == .on)
     }
 
     @objc private func handleLaunchAtLoginToggled() {

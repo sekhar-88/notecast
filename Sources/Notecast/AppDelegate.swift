@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var toggleMenuItem: NSMenuItem!
     private var backgroundMenuItems: [SurfaceStyle: NSMenuItem] = [:]
     private var neonGlowMenuItem: NSMenuItem!
+    private var ghostModeMenuItem: NSMenuItem!
     private var alwaysOnTopMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -83,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             opacity: settings.windowOpacity,
             neonGlowEnabled: settings.neonGlowEnabled,
             neonAccent: settings.neonAccent,
+            ghostOnUnfocus: settings.ghostOnUnfocus,
             hotKeyHint: settings.hotKey.displayString
         )
         panel.delegate = self
@@ -163,6 +165,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         panel.onToggleNotesSearch = { [weak self] in
             self?.toggleCommandPalette(mode: .notesOnly)
+        }
+
+        panel.onShouldAllowGhostMode = { [weak self] in
+            !(self?.settingsController?.window?.isVisible ?? false)
+        }
+
+        panel.onWakeFromGhost = { [weak self] in
+            self?.showPanel()
         }
 
         panel.notesListView.onSelectNote = { [weak self] noteID in
@@ -284,6 +294,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         neonGlowMenuItem.target = self
         menu.addItem(neonGlowMenuItem)
 
+        ghostModeMenuItem = NSMenuItem(
+            title: "Ghost Outline When Unfocused",
+            action: #selector(handleToggleGhostModeFromMenu),
+            keyEquivalent: ""
+        )
+        ghostModeMenuItem.target = self
+        menu.addItem(ghostModeMenuItem)
+
         alwaysOnTopMenuItem = NSMenuItem(
             title: "Always on Top",
             action: #selector(handleToggleAlwaysOnTopFromMenu),
@@ -337,7 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // MARK: - Panel Show / Hide
 
     func togglePanel() {
-        if panel.isVisible {
+        if panel.isVisible && !panel.isGhosted {
             hidePanel()
         } else {
             showPanel()
@@ -353,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         let clampedFrame = resolvedPanelFrame(preferCurrentFrame: true)
         panel.setFrame(clampedFrame, display: false)
+        panel.setGhosted(false, animated: true)
         panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -365,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         panel.updateSaveStatus("Saved")
         panel.orderOut(nil)
+        panel.setGhosted(false, animated: false)
 
         let settingsVisible = settingsController?.window?.isVisible ?? false
         if NSApp.isActive, !settingsVisible {
@@ -473,6 +493,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 updateNeonGlow(true)
             }
             updateNeonAccent(settings.neonAccent.next())
+        case .toggleGhostMode:
+            updateGhostOnUnfocus(!settings.ghostOnUnfocus)
         case .toggleAlwaysOnTop:
             updateAlwaysOnTop(!settings.alwaysOnTop)
         case .toggleFollowSpaces:
@@ -543,6 +565,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settingsController?.refreshFromSettings()
     }
 
+    private func updateGhostOnUnfocus(_ enabled: Bool) {
+        settings.ghostOnUnfocus = enabled
+        panel.applyGhostOnUnfocus(enabled)
+        settingsController?.refreshFromSettings()
+    }
+
     private func updateHotKey(_ combo: HotKeyCombo) -> OSStatus {
         let status = hotKeyManager.register(combo)
         if status == noErr {
@@ -594,12 +622,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // MARK: - NSMenuDelegate
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let actionWord = panel.isVisible ? "Hide" : "Show"
+        let actionWord = (panel.isVisible && !panel.isGhosted) ? "Hide" : "Show"
         toggleMenuItem.title = "\(actionWord) Notecast (\(settings.hotKey.displayString))"
         for (style, item) in backgroundMenuItems {
             item.state = (style == settings.surfaceStyle) ? .on : .off
         }
         neonGlowMenuItem.state = settings.neonGlowEnabled ? .on : .off
+        ghostModeMenuItem.state = settings.ghostOnUnfocus ? .on : .off
         alwaysOnTopMenuItem.state = settings.alwaysOnTop ? .on : .off
     }
 
@@ -610,21 +639,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func handleNewNoteFromMenu() {
-        if !panel.isVisible {
+        if !panel.isVisible || panel.isGhosted {
             showPanel()
         }
         createNewNote()
     }
 
     @objc private func handleNotesListFromMenu() {
-        if !panel.isVisible {
+        if !panel.isVisible || panel.isGhosted {
             showPanel()
         }
         showNotesList()
     }
 
     @objc private func handleCommandPaletteFromMenu() {
-        if !panel.isVisible {
+        if !panel.isVisible || panel.isGhosted {
             showPanel()
         }
         flushActiveNoteSync()
@@ -632,7 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func handleNotesSearchFromMenu() {
-        if !panel.isVisible {
+        if !panel.isVisible || panel.isGhosted {
             showPanel()
         }
         flushActiveNoteSync()
@@ -648,6 +677,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @objc private func handleToggleNeonGlowFromMenu() {
         updateNeonGlow(!settings.neonGlowEnabled)
+    }
+
+    @objc private func handleToggleGhostModeFromMenu() {
+        updateGhostOnUnfocus(!settings.ghostOnUnfocus)
     }
 
     @objc private func handleToggleAlwaysOnTopFromMenu() {
@@ -698,6 +731,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             controller.onFollowAllSpacesChanged = { [weak self] enabled in
                 self?.updateFollowAllSpaces(enabled)
+            }
+            controller.onGhostOnUnfocusChanged = { [weak self] enabled in
+                self?.updateGhostOnUnfocus(enabled)
             }
             controller.onRevealNotesFolder = { [weak self] in
                 self?.revealNotesFolderInFinder()
