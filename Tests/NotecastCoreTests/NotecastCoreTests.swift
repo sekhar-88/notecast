@@ -308,6 +308,21 @@ struct MarkdownStylerTests {
         #expect(doneStrike == NSUnderlineStyle.single.rawValue)
         #expect(todoStrike == nil || todoStrike == 0)
     }
+
+    @Test("Applies word-wrapping line break mode to base and list paragraphs")
+    func wordWrapParagraphStyle() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let text = "A very long paragraph\n- A very long checklist item"
+        let storage = NSTextStorage(string: text)
+        styler.styleAll(storage)
+
+        let baseStyle = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let listIdx = (text as NSString).range(of: "- ").location
+        let listStyle = storage.attribute(.paragraphStyle, at: listIdx, effectiveRange: nil) as? NSParagraphStyle
+
+        #expect(baseStyle?.lineBreakMode == .byWordWrapping)
+        #expect(listStyle?.lineBreakMode == .byWordWrapping)
+    }
 }
 
 @Suite("WindowFrameClamper")
@@ -487,6 +502,19 @@ struct CommandPaletteSearchTests {
         #expect(hasNote)
         #expect(hasCommand)
     }
+
+    @Test("Notes-only mode returns only notes even for empty or command-prefix queries")
+    func notesOnlyMode() {
+        let emptyEntries = CommandPaletteSearch.results(query: "", matchingNotes: sampleNotes, mode: .notesOnly)
+        #expect(emptyEntries.count == sampleNotes.count)
+        #expect(emptyEntries.allSatisfy {
+            if case .note = $0 { return true }
+            return false
+        })
+
+        let prefixEntries = CommandPaletteSearch.results(query: ">neon", matchingNotes: [sampleNotes[1]], mode: .notesOnly)
+        #expect(prefixEntries == [.note(sampleNotes[1])])
+    }
 }
 
 @Suite("AppSettingsAndStyler")
@@ -499,27 +527,36 @@ struct AppSettingsAndStylerTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.surfaceStyle == .immersiveBlack)
+        #expect(settings.surfaceStyle == .charcoal)
         #expect(settings.neonGlowEnabled == true)
         #expect(settings.neonAccent == .cyan)
         #expect(settings.fontFamily == "system")
 
-        settings.surfaceStyle = .translucentHUD
+        settings.surfaceStyle = .midnightSlate
         settings.neonGlowEnabled = false
         settings.neonAccent = .magenta
-        settings.fontFamily = "Menlo"
+        settings.fontFamily = "system-serif"
 
         let reloaded = AppSettings(defaults: defaults)
-        #expect(reloaded.surfaceStyle == .translucentHUD)
+        #expect(reloaded.surfaceStyle == .midnightSlate)
         #expect(reloaded.neonGlowEnabled == false)
         #expect(reloaded.neonAccent == .magenta)
-        #expect(reloaded.fontFamily == "Menlo")
+        #expect(reloaded.fontFamily == "system-serif")
+        #expect(SurfaceStyle.warmPaper.isLight)
+        #expect(SurfaceStyle.charcoal.isOpaque)
+        #expect(!SurfaceStyle.translucentHUD.isOpaque)
     }
 
-    @Test("MarkdownStyler.resolveFont resolves system, system-mono, Menlo, and unknown fallback")
+    @Test("MarkdownStyler.resolveFont resolves system, rounded, serif, mono, Menlo, and unknown fallback")
     func fontResolution() {
         let sys = MarkdownStyler.resolveFont(family: "system", size: 15)
         #expect(sys.pointSize == 15)
+
+        let rounded = MarkdownStyler.resolveFont(family: "system-rounded", size: 15)
+        #expect(rounded.pointSize == 15)
+
+        let serif = MarkdownStyler.resolveFont(family: "system-serif", size: 15)
+        #expect(serif.pointSize == 15)
 
         let mono = MarkdownStyler.resolveFont(family: "system-mono", size: 13)
         #expect(mono.fontDescriptor.symbolicTraits.contains(.monoSpace))

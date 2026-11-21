@@ -5,13 +5,14 @@ An ultra-lightweight, single-process native macOS floating Markdown scratchpad b
 ## Features
 
 - **Instant Global Hotkey** (`⌥ Space` by default, configurable in Settings) — always opens back into the note view on the last note you were working on
-- **Immersive Black Mode & Active Neon Glow**: opaque `#000000` distraction-free surface (or optional translucent HUD) with a luminous neon edge glow when the window is in focus (Cyan, Violet, Magenta, Emerald, or Amber)
+- **Curated Background Themes & Active Neon Glow**: choose from **Charcoal (Opaque, default)**, **Midnight Slate**, **Warm Espresso**, **Deep Forest**, **Pure Black**, **Warm Paper (Light)**, or **Translucent HUD**, paired with a luminous neon edge glow when focused (Cyan, Violet, Magenta, Emerald, or Amber)
 - **Always-On-Top Floating Panel**: stays above other apps and full-screen Spaces while windows underneath remain interactable
-- **Multi-Note Library & Built-In Command Palette**:
-  - `⌘P` opens a Raycast-style search & command palette (search note titles/content or type `>` for commands)
+- **Multi-Note Library & Built-In Search / Command Palette**:
+  - `⌘P` opens the Raycast-style search & command palette (search notes or type `>` for commands)
+  - `⌘⇧P` opens **Notes-Only Search** to jump directly between notes
   - `⌘N` creates a new note
   - `⌘L` opens the notes list to switch or delete notes
-- **Selectable Fonts & Sizing**: choose System (SF Pro), SF Mono, Menlo, Avenir Next, Georgia, or any installed macOS font family
+- **Selectable Apple & System Fonts**: choose System (SF Pro), SF Pro Rounded, New York (Serif), SF Mono, Avenir Next, Menlo, Georgia, or any installed macOS font family, with full word wrap and `⌘+` / `⌘-` / `⌘0` sizing
 - **Live Markdown Styling & Smart Editing**: headings (`#`–`####`), **bold**, *italic*, ***bold italic***, ~~strikethrough~~, `` `inline code` ``, `> blockquotes`, auto-continuing lists, and clickable `- [ ]` / `- [x]` checklists
 - **Atomic Persistence & Size Memory**: remembers window position and resized dimensions, and saves each note atomically under `~/Library/Application Support/Notecast/notes/`
 
@@ -23,6 +24,7 @@ An ultra-lightweight, single-process native macOS floating Markdown scratchpad b
 | :--- | :--- |
 | `⌥ Space` (configurable) | Show / hide Notecast |
 | `⌘P` | Search notes & run commands |
+| `⌘⇧P` | Search notes only |
 | `⌘N` | Create a new note |
 | `⌘L` | Show / hide notes list |
 | `Esc` | Dismiss palette or notes list |

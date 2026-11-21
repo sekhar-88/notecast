@@ -5,9 +5,11 @@ import Foundation
 public final class MarkdownStyler {
     public static let curatedFontFamilies: [(id: String, label: String)] = [
         ("system", "System (SF Pro)"),
+        ("system-rounded", "SF Pro Rounded"),
+        ("system-serif", "New York (Serif)"),
         ("system-mono", "SF Mono"),
-        ("Menlo", "Menlo"),
         ("Avenir Next", "Avenir Next"),
+        ("Menlo", "Menlo"),
         ("Georgia", "Georgia"),
         ("Helvetica Neue", "Helvetica Neue")
     ]
@@ -48,6 +50,22 @@ public final class MarkdownStyler {
         switch family {
         case "system":
             return NSFont.systemFont(ofSize: size, weight: weight)
+        case "system-rounded":
+            let base = NSFont.systemFont(ofSize: size, weight: weight)
+            if let descriptor = base.fontDescriptor.withDesign(.rounded),
+               let font = NSFont(descriptor: descriptor, size: size)
+            {
+                return font
+            }
+            return base
+        case "system-serif":
+            let base = NSFont.systemFont(ofSize: size, weight: weight)
+            if let descriptor = base.fontDescriptor.withDesign(.serif),
+               let font = NSFont(descriptor: descriptor, size: size)
+            {
+                return font
+            }
+            return base
         case "system-mono":
             return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
         default:
@@ -84,6 +102,7 @@ public final class MarkdownStyler {
     public func baseAttributes() -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 3.5
+        paragraph.lineBreakMode = .byWordWrapping
 
         return [
             .font: Self.resolveFont(family: fontFamily, size: baseFontSize),
@@ -315,6 +334,7 @@ public final class MarkdownStyler {
     private func applyHangingIndent(_ indent: CGFloat, to storage: NSTextStorage, range: NSRange) {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 3.5
+        style.lineBreakMode = .byWordWrapping
         style.headIndent = indent
         storage.addAttribute(.paragraphStyle, value: style, range: range)
     }

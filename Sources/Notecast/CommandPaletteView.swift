@@ -1,15 +1,16 @@
 import AppKit
 import NotecastCore
 
-/// Raycast-style inline modal search & command palette overlay (`⌘P`).
+/// Raycast-style inline modal search & command palette overlay (`⌘P` / `⌘⇧P`).
 @MainActor
 final class CommandPaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
-    var queryProvider: ((String) -> [PaletteEntry])?
+    var queryProvider: ((String, PaletteMode) -> [PaletteEntry])?
     var onSelectEntry: ((PaletteEntry) -> Void)?
     var onDismiss: (() -> Void)?
 
     private var entries: [PaletteEntry] = []
-    private var surfaceStyle: SurfaceStyle = .immersiveBlack
+    private var mode: PaletteMode = .all
+    private var surfaceStyle: SurfaceStyle = .charcoal
     private var neonGlowEnabled = true
     private var neonAccent: NeonAccent = .cyan
 
@@ -32,13 +33,24 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSour
     }
 
     func openPalette(
+        mode: PaletteMode,
         surfaceStyle: SurfaceStyle,
         neonGlowEnabled: Bool,
         neonAccent: NeonAccent
     ) {
+        self.mode = mode
         self.surfaceStyle = surfaceStyle
         self.neonGlowEnabled = neonGlowEnabled
         self.neonAccent = neonAccent
+
+        switch mode {
+        case .all:
+            searchField.placeholderString = "Search notes or type > for commands…"
+            emptyLabel.stringValue = "No matching notes or commands"
+        case .notesOnly:
+            searchField.placeholderString = "Search notes…"
+            emptyLabel.stringValue = "No matching notes"
+        }
 
         searchField.stringValue = ""
         reloadResults()
@@ -170,26 +182,22 @@ final class CommandPaletteView: NSView, NSTextFieldDelegate, NSTableViewDataSour
     }
 
     private func applyTheme() {
-        switch surfaceStyle {
-        case .immersiveBlack:
-            cardView.layer?.backgroundColor = NSColor(srgbRed: 0.043, green: 0.043, blue: 0.063, alpha: 0.98).cgColor
-            divider.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.12).cgColor
-        case .translucentHUD:
-            cardView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.95).cgColor
-            divider.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
-        }
+        let backdropAlpha: CGFloat = surfaceStyle.isLight ? 0.28 : 0.55
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(backdropAlpha).cgColor
+        cardView.layer?.backgroundColor = surfaceStyle.paletteCardColor.cgColor
+        divider.layer?.backgroundColor = surfaceStyle.calmSeparatorColor.cgColor
 
         if neonGlowEnabled {
             cardView.layer?.borderColor = neonAccent.nsColor.withAlphaComponent(0.65).cgColor
             searchIcon.contentTintColor = neonAccent.nsColor
         } else {
-            cardView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+            cardView.layer?.borderColor = surfaceStyle.calmBorderColor.cgColor
             searchIcon.contentTintColor = .secondaryLabelColor
         }
     }
 
     private func reloadResults() {
-        entries = queryProvider?(searchField.stringValue) ?? []
+        entries = queryProvider?(searchField.stringValue, mode) ?? []
         emptyLabel.isHidden = !entries.isEmpty
         tableView.reloadData()
         if !entries.isEmpty {

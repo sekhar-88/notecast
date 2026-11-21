@@ -12,7 +12,7 @@ final class NotesListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     private var notes: [NoteMetadata] = []
     private var activeNoteID: UUID?
-    private var surfaceStyle: SurfaceStyle = .immersiveBlack
+    private var surfaceStyle: SurfaceStyle = .charcoal
     private var neonAccent: NeonAccent = .cyan
 
     private let countLabel = NSTextField(labelWithString: "Notes")
@@ -162,15 +162,14 @@ final class NotesListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
         applySurfaceAppearance()
     }
 
+    func applySurfaceStyle(_ style: SurfaceStyle) {
+        self.surfaceStyle = style
+        applySurfaceAppearance()
+    }
+
     private func applySurfaceAppearance() {
-        switch surfaceStyle {
-        case .immersiveBlack:
-            layer?.backgroundColor = NSColor.black.cgColor
-            separator.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.12).cgColor
-        case .translucentHUD:
-            layer?.backgroundColor = NSColor.clear.cgColor
-            separator.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
-        }
+        layer?.backgroundColor = (surfaceStyle.backgroundColor ?? .clear).cgColor
+        separator.layer?.backgroundColor = surfaceStyle.calmSeparatorColor.cgColor
     }
 
     // MARK: - NSTableViewDataSource & NSTableViewDelegate

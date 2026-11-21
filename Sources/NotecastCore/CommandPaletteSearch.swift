@@ -1,9 +1,17 @@
 import Foundation
 
+/// Controls whether the palette shows both notes and commands (`⌘P`) or notes only (`⌘⇧P`).
+public enum PaletteMode: Equatable, Sendable {
+    case all
+    case notesOnly
+}
+
 /// Identifiers for built-in commands available from the `⌘P` search & command palette.
 public enum AppCommandID: String, CaseIterable, Sendable {
     case newNote
+    case searchNotesOnly
     case showNotesList
+    case cycleBackgroundTheme
     case toggleImmersiveBlack
     case toggleNeonGlow
     case cycleNeonAccent
@@ -52,6 +60,14 @@ public struct AppCommandDescriptor: Equatable, Sendable {
             keywords: ["create", "add", "blank", "scratchpad"]
         ),
         AppCommandDescriptor(
+            id: .searchNotesOnly,
+            title: "Search Notes Only",
+            subtitle: "Find and open notes without app commands",
+            shortcut: "⌘⇧P",
+            symbolName: "doc.text.magnifyingglass",
+            keywords: ["find", "search", "notes", "filter", "only"]
+        ),
+        AppCommandDescriptor(
             id: .showNotesList,
             title: "Show Notes List",
             subtitle: "Browse, switch, or delete saved notes",
@@ -60,12 +76,20 @@ public struct AppCommandDescriptor: Equatable, Sendable {
             keywords: ["notes", "browse", "switch", "history", "list"]
         ),
         AppCommandDescriptor(
+            id: .cycleBackgroundTheme,
+            title: "Cycle Background Color",
+            subtitle: "Switch between Charcoal, Slate, Espresso, Forest, Black, Paper, and HUD",
+            shortcut: "",
+            symbolName: "swatchpalette",
+            keywords: ["background", "color", "theme", "charcoal", "slate", "espresso", "forest", "paper", "hud"]
+        ),
+        AppCommandDescriptor(
             id: .toggleImmersiveBlack,
-            title: "Toggle Immersive Black / Translucent HUD",
-            subtitle: "Switch between opaque black and translucent HUD",
+            title: "Toggle Pure Black / Charcoal",
+            subtitle: "Switch between Pure Black (#000) and Charcoal",
             shortcut: "",
             symbolName: "circle.lefthalf.filled",
-            keywords: ["opaque", "black", "dark", "theme", "surface", "hud", "transparent"]
+            keywords: ["opaque", "black", "charcoal", "dark", "theme", "surface"]
         ),
         AppCommandDescriptor(
             id: .toggleNeonGlow,
@@ -161,8 +185,13 @@ public enum CommandPaletteSearch {
     public static func results(
         query: String,
         matchingNotes: [NoteMetadata],
+        mode: PaletteMode = .all,
         commands: [AppCommandDescriptor] = AppCommandDescriptor.all
     ) -> [PaletteEntry] {
+        if mode == .notesOnly {
+            return matchingNotes.map { .note($0) }
+        }
+
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.hasPrefix(">") {

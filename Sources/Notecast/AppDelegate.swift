@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var previousApp: NSRunningApplication?
 
     private var toggleMenuItem: NSMenuItem!
-    private var immersiveBlackMenuItem: NSMenuItem!
+    private var backgroundMenuItems: [SurfaceStyle: NSMenuItem] = [:]
     private var neonGlowMenuItem: NSMenuItem!
     private var alwaysOnTopMenuItem: NSMenuItem!
 
@@ -121,7 +121,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         panel.textView.onOpenSearch = { [weak self] in
-            self?.toggleCommandPalette()
+            self?.toggleCommandPalette(mode: .all)
+        }
+
+        panel.textView.onOpenNotesSearch = { [weak self] in
+            self?.toggleCommandPalette(mode: .notesOnly)
         }
 
         panel.textView.onNewNote = { [weak self] in
@@ -154,7 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         panel.onToggleCommandPalette = { [weak self] in
-            self?.toggleCommandPalette()
+            self?.toggleCommandPalette(mode: .all)
+        }
+
+        panel.onToggleNotesSearch = { [weak self] in
+            self?.toggleCommandPalette(mode: .notesOnly)
         }
 
         panel.notesListView.onSelectNote = { [weak self] noteID in
@@ -173,10 +181,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             self?.panel.hideNotesList()
         }
 
-        panel.commandPaletteView.queryProvider = { [weak self] query in
+        panel.commandPaletteView.queryProvider = { [weak self] query, mode in
             guard let self else { return [] }
             let matchingNotes = self.noteLibrary.searchNotes(query: query)
-            return CommandPaletteSearch.results(query: query, matchingNotes: matchingNotes)
+            return CommandPaletteSearch.results(query: query, matchingNotes: matchingNotes, mode: mode)
         }
 
         panel.commandPaletteView.onSelectEntry = { [weak self] entry in
@@ -240,15 +248,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         searchItem.target = self
         menu.addItem(searchItem)
 
+        let searchNotesItem = NSMenuItem(
+            title: "Search Notes",
+            action: #selector(handleNotesSearchFromMenu),
+            keyEquivalent: "P"
+        )
+        searchNotesItem.keyEquivalentModifierMask = [.command, .shift]
+        searchNotesItem.target = self
+        menu.addItem(searchNotesItem)
+
         menu.addItem(.separator())
 
-        immersiveBlackMenuItem = NSMenuItem(
-            title: "Immersive Black (Opaque)",
-            action: #selector(handleToggleImmersiveBlackFromMenu),
-            keyEquivalent: ""
-        )
-        immersiveBlackMenuItem.target = self
-        menu.addItem(immersiveBlackMenuItem)
+        let backgroundItem = NSMenuItem(title: "Background", action: nil, keyEquivalent: "")
+        let backgroundSubmenu = NSMenu()
+        backgroundMenuItems.removeAll()
+        for style in SurfaceStyle.allCases {
+            let item = NSMenuItem(
+                title: style.displayName,
+                action: #selector(handleSelectBackgroundFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = style.rawValue
+            backgroundSubmenu.addItem(item)
+            backgroundMenuItems[style] = item
+        }
+        backgroundItem.submenu = backgroundSubmenu
+        menu.addItem(backgroundItem)
 
         neonGlowMenuItem = NSMenuItem(
             title: "Neon Active Glow",
@@ -417,12 +443,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.showNotesList(notes: noteLibrary.allNotes(), activeNoteID: activeNoteID)
     }
 
-    private func toggleCommandPalette() {
-        if panel.isCommandPaletteVisible {
+    private func toggleCommandPalette(mode: PaletteMode) {
+        if panel.isCommandPaletteVisible && panel.activePaletteMode == mode {
             panel.hideCommandPalette()
         } else {
             flushActiveNoteSync()
-            panel.showCommandPalette()
+            panel.showCommandPalette(mode: mode)
         }
     }
 
@@ -430,10 +456,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         switch id {
         case .newNote:
             createNewNote()
+        case .searchNotesOnly:
+            flushActiveNoteSync()
+            panel.showCommandPalette(mode: .notesOnly)
         case .showNotesList:
             showNotesList()
+        case .cycleBackgroundTheme:
+            updateSurfaceStyle(settings.surfaceStyle.next())
         case .toggleImmersiveBlack:
-            let next: SurfaceStyle = settings.surfaceStyle == .immersiveBlack ? .translucentHUD : .immersiveBlack
+            let next: SurfaceStyle = settings.surfaceStyle == .immersiveBlack ? .charcoal : .immersiveBlack
             updateSurfaceStyle(next)
         case .toggleNeonGlow:
             updateNeonGlow(!settings.neonGlowEnabled)
@@ -565,7 +596,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func menuNeedsUpdate(_ menu: NSMenu) {
         let actionWord = panel.isVisible ? "Hide" : "Show"
         toggleMenuItem.title = "\(actionWord) Notecast (\(settings.hotKey.displayString))"
-        immersiveBlackMenuItem.state = settings.surfaceStyle == .immersiveBlack ? .on : .off
+        for (style, item) in backgroundMenuItems {
+            item.state = (style == settings.surfaceStyle) ? .on : .off
+        }
         neonGlowMenuItem.state = settings.neonGlowEnabled ? .on : .off
         alwaysOnTopMenuItem.state = settings.alwaysOnTop ? .on : .off
     }
@@ -595,12 +628,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             showPanel()
         }
         flushActiveNoteSync()
-        panel.showCommandPalette()
+        panel.showCommandPalette(mode: .all)
     }
 
-    @objc private func handleToggleImmersiveBlackFromMenu() {
-        let next: SurfaceStyle = settings.surfaceStyle == .immersiveBlack ? .translucentHUD : .immersiveBlack
-        updateSurfaceStyle(next)
+    @objc private func handleNotesSearchFromMenu() {
+        if !panel.isVisible {
+            showPanel()
+        }
+        flushActiveNoteSync()
+        panel.showCommandPalette(mode: .notesOnly)
+    }
+
+    @objc private func handleSelectBackgroundFromMenu(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let style = SurfaceStyle(rawValue: raw)
+        else { return }
+        updateSurfaceStyle(style)
     }
 
     @objc private func handleToggleNeonGlowFromMenu() {

@@ -1,16 +1,119 @@
 import AppKit
 import Foundation
 
-/// Controls whether the floating window renders as an opaque immersive black surface or translucent HUD.
+/// Controls the floating panel background theme (curated opaque dark/light surfaces or translucent HUD).
 public enum SurfaceStyle: String, Codable, CaseIterable, Sendable {
+    case charcoal
+    case midnightSlate
+    case warmEspresso
+    case deepForest
     case immersiveBlack
+    case warmPaper
     case translucentHUD
 
     public var displayName: String {
         switch self {
-        case .immersiveBlack: return "Immersive Black (Opaque)"
+        case .charcoal: return "Charcoal (Opaque)"
+        case .midnightSlate: return "Midnight Slate"
+        case .warmEspresso: return "Warm Espresso"
+        case .deepForest: return "Deep Forest"
+        case .immersiveBlack: return "Pure Black"
+        case .warmPaper: return "Warm Paper (Light)"
         case .translucentHUD: return "Translucent HUD"
         }
+    }
+
+    public var isOpaque: Bool {
+        self != .translucentHUD
+    }
+
+    public var isLight: Bool {
+        self == .warmPaper
+    }
+
+    public var backgroundColor: NSColor? {
+        switch self {
+        case .charcoal:
+            return NSColor(srgbRed: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0, alpha: 1.0)
+        case .midnightSlate:
+            return NSColor(srgbRed: 0x17 / 255.0, green: 0x1C / 255.0, blue: 0x26 / 255.0, alpha: 1.0)
+        case .warmEspresso:
+            return NSColor(srgbRed: 0x1A / 255.0, green: 0x17 / 255.0, blue: 0x15 / 255.0, alpha: 1.0)
+        case .deepForest:
+            return NSColor(srgbRed: 0x12 / 255.0, green: 0x1A / 255.0, blue: 0x17 / 255.0, alpha: 1.0)
+        case .immersiveBlack:
+            return NSColor.black
+        case .warmPaper:
+            return NSColor(srgbRed: 0xF7 / 255.0, green: 0xF5 / 255.0, blue: 0xF0 / 255.0, alpha: 1.0)
+        case .translucentHUD:
+            return nil
+        }
+    }
+
+    public var headerBackgroundColor: NSColor? {
+        switch self {
+        case .charcoal:
+            return NSColor(srgbRed: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0, alpha: 1.0)
+        case .midnightSlate:
+            return NSColor(srgbRed: 0x1E / 255.0, green: 0x25 / 255.0, blue: 0x33 / 255.0, alpha: 1.0)
+        case .warmEspresso:
+            return NSColor(srgbRed: 0x22 / 255.0, green: 0x1E / 255.0, blue: 0x1B / 255.0, alpha: 1.0)
+        case .deepForest:
+            return NSColor(srgbRed: 0x18 / 255.0, green: 0x23 / 255.0, blue: 0x1F / 255.0, alpha: 1.0)
+        case .immersiveBlack:
+            return NSColor(srgbRed: 0x08 / 255.0, green: 0x08 / 255.0, blue: 0x0C / 255.0, alpha: 1.0)
+        case .warmPaper:
+            return NSColor(srgbRed: 0xEF / 255.0, green: 0xEC / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
+        case .translucentHUD:
+            return nil
+        }
+    }
+
+    public var paletteCardColor: NSColor {
+        switch self {
+        case .charcoal:
+            return NSColor(srgbRed: 0x19 / 255.0, green: 0x1B / 255.0, blue: 0x22 / 255.0, alpha: 0.98)
+        case .midnightSlate:
+            return NSColor(srgbRed: 0x1B / 255.0, green: 0x21 / 255.0, blue: 0x2E / 255.0, alpha: 0.98)
+        case .warmEspresso:
+            return NSColor(srgbRed: 0x1F / 255.0, green: 0x1B / 255.0, blue: 0x18 / 255.0, alpha: 0.98)
+        case .deepForest:
+            return NSColor(srgbRed: 0x16 / 255.0, green: 0x20 / 255.0, blue: 0x1C / 255.0, alpha: 0.98)
+        case .immersiveBlack:
+            return NSColor(srgbRed: 0x0B / 255.0, green: 0x0B / 255.0, blue: 0x10 / 255.0, alpha: 0.98)
+        case .warmPaper:
+            return NSColor(srgbRed: 0xFB / 255.0, green: 0xF9 / 255.0, blue: 0xF5 / 255.0, alpha: 0.98)
+        case .translucentHUD:
+            return NSColor.windowBackgroundColor.withAlphaComponent(0.95)
+        }
+    }
+
+    public var calmBorderColor: NSColor {
+        switch self {
+        case .translucentHUD:
+            return NSColor.separatorColor.withAlphaComponent(0.55)
+        case .warmPaper:
+            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.14)
+        default:
+            return NSColor(white: 1.0, alpha: 0.14)
+        }
+    }
+
+    public var calmSeparatorColor: NSColor {
+        switch self {
+        case .translucentHUD:
+            return NSColor.separatorColor.withAlphaComponent(0.35)
+        case .warmPaper:
+            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.10)
+        default:
+            return NSColor(white: 1.0, alpha: 0.12)
+        }
+    }
+
+    public func next() -> SurfaceStyle {
+        let all = Self.allCases
+        guard let idx = all.firstIndex(of: self) else { return .charcoal }
+        return all[(idx + 1) % all.count]
     }
 }
 
@@ -172,7 +275,7 @@ public final class AppSettings {
             guard let raw = defaults.string(forKey: Keys.surfaceStyle),
                   let style = SurfaceStyle(rawValue: raw)
             else {
-                return .immersiveBlack
+                return .charcoal
             }
             return style
         }

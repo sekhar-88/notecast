@@ -10,6 +10,7 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
     var onFontSizeReset: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onOpenSearch: (() -> Void)?
+    var onOpenNotesSearch: (() -> Void)?
     var onNewNote: (() -> Void)?
     var onToggleNotesList: (() -> Void)?
 
@@ -263,6 +264,9 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
             }
         } else if modifiers == [.command, .shift] {
             switch key {
+            case "p":
+                onOpenNotesSearch?()
+                return true
             case "z":
                 undoManager?.redo()
                 return true

@@ -79,10 +79,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             surfacePopup.selectItem(at: surfaceIndex)
         }
 
-        let isImmersive = settings.surfaceStyle == .immersiveBlack
-        opacitySlider.isEnabled = !isImmersive
+        let isOpaque = settings.surfaceStyle.isOpaque
+        opacitySlider.isEnabled = !isOpaque
         opacitySlider.doubleValue = settings.windowOpacity
-        if isImmersive {
+        if isOpaque {
             opacityValueLabel.stringValue = "100% (Opaque)"
         } else {
             opacityValueLabel.stringValue = "\(Int((settings.windowOpacity * 100).rounded()))%"
@@ -148,7 +148,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         NSLayoutConstraint.activate([
             surfacePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 210)
         ])
-        grid.addRow(with: [makeTitleLabel("Surface:"), surfacePopup])
+        grid.addRow(with: [makeTitleLabel("Background:"), surfacePopup])
 
         // 3. Opacity slider
         opacitySlider.isContinuous = true
