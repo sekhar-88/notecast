@@ -4,7 +4,7 @@ import ServiceManagement
 
 /// Native macOS Preferences window for Notecast.
 @MainActor
-final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate {
     var onHotKeyChange: ((HotKeyCombo) -> OSStatus)?
     var onRecordingStateChanged: ((Bool) -> Void)?
     var onSurfaceStyleChanged: ((SurfaceStyle) -> Void)?
@@ -12,6 +12,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onNeonGlowChanged: ((Bool) -> Void)?
     var onNeonAccentChanged: ((NeonAccent) -> Void)?
     var onFontFamilyChanged: ((String) -> Void)?
+    var onFontFamilyPreview: ((String) -> Void)?
     var onFontSizeChanged: ((CGFloat) -> Void)?
     var onAlwaysOnTopChanged: ((Bool) -> Void)?
     var onFollowAllSpacesChanged: ((Bool) -> Void)?
@@ -23,7 +24,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private let hotKeyRecorder: HotKeyRecorderControl
     private let hotKeyStatusLabel = NSTextField(labelWithString: "")
-    private let surfacePopup = NSPopUpButton()
+    private let backgroundPaletteView = BackgroundPaletteView()
     private let opacitySlider = NSSlider(value: 0.96, minValue: AppSettings.minOpacity, maxValue: AppSettings.maxOpacity, target: nil, action: nil)
     private let opacityValueLabel = NSTextField(labelWithString: "96%")
     private let neonGlowCheckbox = NSButton(checkboxWithTitle: "Neon glow when active", target: nil, action: nil)
@@ -37,18 +38,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch Notecast at login", target: nil, action: nil)
     private let launchNoteLabel = NSTextField(labelWithString: "")
 
+    private var fontFamilyBeforeMenuOpen: String?
+    private var didCommitFontSelection = false
+
     init(settings: AppSettings, notesDirectoryURL: URL) {
         self.settings = settings
         self.notesDirectoryURL = notesDirectoryURL
         self.hotKeyRecorder = HotKeyRecorderControl(combo: settings.hotKey)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 470, height: 492),
+            contentRect: NSRect(x: 0, y: 0, width: 490, height: 545),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = "Notecast Settings"
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
         window.center()
 
@@ -65,10 +71,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func showAndFocus() {
+    func showAndFocus(avoiding panelFrame: NSRect? = nil) {
         refreshFromSettings()
         if let window {
-            window.center()
+            window.layoutIfNeeded()
+            if let panelFrame {
+                let matchingScreen = NSScreen.screens.first { $0.frame.intersects(panelFrame) }
+                    ?? NSScreen.main
+                    ?? NSScreen.screens.first
+                if let visibleFrame = matchingScreen?.visibleFrame {
+                    let origin = WindowFrameClamper.settingsOrigin(
+                        for: window.frame.size,
+                        avoiding: panelFrame,
+                        in: visibleFrame
+                    )
+                    window.setFrameOrigin(origin)
+                } else {
+                    window.center()
+                }
+            } else {
+                window.center()
+            }
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
         }
@@ -76,10 +99,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func refreshFromSettings() {
         hotKeyRecorder.combo = settings.hotKey
-
-        if let surfaceIndex = SurfaceStyle.allCases.firstIndex(of: settings.surfaceStyle) {
-            surfacePopup.selectItem(at: surfaceIndex)
-        }
+        backgroundPaletteView.selectedStyle = settings.surfaceStyle
 
         let isOpaque = settings.surfaceStyle.isOpaque
         opacitySlider.isEnabled = !isOpaque
@@ -143,15 +163,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         hotKeyStack.spacing = 4
         grid.addRow(with: [makeTitleLabel("Global Hotkey:"), hotKeyStack])
 
-        // 2. Surface style
-        surfacePopup.removeAllItems()
-        for style in SurfaceStyle.allCases {
-            surfacePopup.addItem(withTitle: style.displayName)
-        }
-        NSLayoutConstraint.activate([
-            surfacePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 210)
-        ])
-        grid.addRow(with: [makeTitleLabel("Background:"), surfacePopup])
+        // 2. Background theme swatch palette
+        grid.addRow(with: [makeTitleLabel("Background:"), backgroundPaletteView])
+        grid.row(at: 1).yPlacement = .top
 
         // 3. Opacity slider
         opacitySlider.isContinuous = true
@@ -293,8 +307,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             self?.applyHotKey(combo)
         }
 
-        surfacePopup.target = self
-        surfacePopup.action = #selector(handleSurfaceStyleChanged)
+        backgroundPaletteView.onSelectStyle = { [weak self] style in
+            self?.onSurfaceStyleChanged?(style)
+        }
 
         opacitySlider.target = self
         opacitySlider.action = #selector(handleOpacityChanged)
@@ -307,6 +322,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         fontFamilyPopup.target = self
         fontFamilyPopup.action = #selector(handleFontFamilyChanged)
+        fontFamilyPopup.menu?.delegate = self
 
         fontSizeStepper.target = self
         fontSizeStepper.action = #selector(handleFontSizeChanged)
@@ -343,12 +359,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    @objc private func handleSurfaceStyleChanged() {
-        let index = surfacePopup.indexOfSelectedItem
-        guard index >= 0, index < SurfaceStyle.allCases.count else { return }
-        onSurfaceStyleChanged?(SurfaceStyle.allCases[index])
-    }
-
     @objc private func handleOpacityChanged() {
         let value = opacitySlider.doubleValue
         opacityValueLabel.stringValue = "\(Int((value * 100).rounded()))%"
@@ -369,7 +379,33 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func handleFontFamilyChanged() {
         guard let selected = fontFamilyPopup.selectedItem?.representedObject as? String else { return }
+        didCommitFontSelection = true
         onFontFamilyChanged?(selected)
+    }
+
+    // MARK: - NSMenuDelegate (Live Font Preview)
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === fontFamilyPopup.menu else { return }
+        fontFamilyBeforeMenuOpen = settings.fontFamily
+        didCommitFontSelection = false
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard menu === fontFamilyPopup.menu,
+              let family = item?.representedObject as? String
+        else { return }
+        onFontFamilyPreview?(family)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === fontFamilyPopup.menu else { return }
+        let fallback = fontFamilyBeforeMenuOpen
+        fontFamilyBeforeMenuOpen = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.didCommitFontSelection, let fallback else { return }
+            self.onFontFamilyPreview?(fallback)
+        }
     }
 
     @objc private func handleFontSizeChanged() {

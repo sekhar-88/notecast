@@ -15,8 +15,8 @@ xattr -cr /Applications/Notecast.app
 
 ## Features
 
-- **Instant Global Hotkey** (`⌥ Space` by default, configurable in Settings) — always opens back into the note view on the last note you were working on
-- **Curated Background Themes & Active Neon Glow**: choose from **Charcoal (Opaque, default)**, **Midnight Slate**, **Warm Espresso**, **Deep Forest**, **Pure Black**, **Warm Paper (Light)**, or **Translucent HUD**, paired with a luminous neon edge glow when focused (Cyan, Violet, Magenta, Emerald, or Amber)
+- **Instant Global Hotkey** (`⌥⌘N` by default, configurable in Settings) — always opens back into the note view on the last note you were working on
+- **12 Background Themes & Active Neon Glow**: choose directly from a visual color swatch palette in Settings — **Charcoal** (default), **Graphite**, **Pure Black**, **Midnight Slate**, **Deep Indigo**, **Nordic Blue**, **Warm Espresso**, **Deep Forest**, **Plum Noir**, **Warm Paper**, **Cool Mist**, or **Translucent HUD**, paired with a luminous neon edge glow when focused (Cyan, Violet, Magenta, Emerald, or Amber)
 - **Ghost Outline Mode (Optional)**: turn completely transparent when unfocused — hiding all text and background while keeping a crisp neon reticle outline and top wake pill so windows underneath are 100% readable and clickable
 - **Always-On-Top Floating Panel**: stays above other apps and full-screen Spaces while windows underneath remain interactable
 - **Multi-Note Library & Built-In Search / Command Palette**:
@@ -24,7 +24,7 @@ xattr -cr /Applications/Notecast.app
   - `⌘⇧P` opens **Notes-Only Search** to jump directly between notes
   - `⌘N` creates a new note
   - `⌘L` opens the notes list to switch or delete notes
-- **Selectable Apple & System Fonts**: choose System (SF Pro), SF Pro Rounded, New York (Serif), SF Mono, Avenir Next, Menlo, Georgia, or any installed macOS font family, with full word wrap and `⌘+` / `⌘-` / `⌘0` sizing
+- **Selectable Apple & System Fonts (with Live Preview)**: choose System (SF Pro), SF Pro Rounded, New York (Serif), SF Mono, Avenir Next, Menlo, Georgia, or any installed macOS font family, previewing live as you navigate with `↑`/`↓` in the font picker, with full word wrap and `⌘+` / `⌘-` / `⌘0` sizing
 - **Live Markdown Styling & Smart Editing**: headings (`#`–`####`), **bold**, *italic*, ***bold italic***, ~~strikethrough~~, `` `inline code` ``, `> blockquotes`, auto-continuing lists, and clickable `- [ ]` / `- [x]` checklists
 - **Atomic Persistence & Size Memory**: remembers window position and resized dimensions, and saves each note atomically under `~/Library/Application Support/Notecast/notes/`
 
@@ -34,7 +34,7 @@ xattr -cr /Applications/Notecast.app
 
 | Shortcut | Action |
 | :--- | :--- |
-| `⌥ Space` (configurable) | Show / hide Notecast |
+| `⌥⌘N` (configurable) | Show / hide Notecast |
 | `⌘P` | Search notes & run commands |
 | `⌘⇧P` | Search notes only |
 | `⌘N` | Create a new note |

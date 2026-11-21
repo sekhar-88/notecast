@@ -64,9 +64,9 @@ struct NoteStoreTests {
 
 @Suite("HotKeyCombo")
 struct HotKeyComboTests {
-    @Test("Default hotkey display string is ⌥ Space")
+    @Test("Default hotkey display string is ⌥⌘N")
     func defaultDisplayString() {
-        #expect(HotKeyCombo.defaultToggle.displayString == "⌥ Space")
+        #expect(HotKeyCombo.defaultToggle.displayString == "⌥⌘N")
     }
 
     @Test("Validates modifier and key combinations")
@@ -78,11 +78,11 @@ struct HotKeyComboTests {
         #expect(cmdShiftN != nil)
         #expect(cmdShiftN?.displayString == "⇧⌘N")
 
-        let optSpace = HotKeyCombo.from(
-            keyCode: UInt16(kVK_Space),
-            modifierFlags: [.option]
+        let optCmdN = HotKeyCombo.from(
+            keyCode: UInt16(kVK_ANSI_N),
+            modifierFlags: [.option, .command]
         )
-        #expect(optSpace == .defaultToggle)
+        #expect(optCmdN == .defaultToggle)
 
         let ctrlOptK = HotKeyCombo.from(
             keyCode: UInt16(kVK_ANSI_K),
@@ -351,6 +351,33 @@ struct WindowFrameClamperTests {
         #expect(result.width >= WindowFrameClamper.minSize.width)
         #expect(result.height >= WindowFrameClamper.minSize.height)
     }
+
+    @Test("Places settings window outside floating panel when space allows")
+    func settingsOriginAvoidsPanel() {
+        let settingsSize = NSSize(width: 490, height: 545)
+
+        // Panel centered-left: Settings fits cleanly on the right
+        let leftPanel = NSRect(x: 200, y: 200, width: 420, height: 520)
+        let rightOrigin = WindowFrameClamper.settingsOrigin(for: settingsSize, avoiding: leftPanel, in: mainVisible)
+        let rightRect = NSRect(origin: rightOrigin, size: settingsSize)
+        #expect(mainVisible.contains(rightRect))
+        #expect(!rightRect.intersects(leftPanel))
+        #expect(rightRect.minX >= leftPanel.maxX)
+
+        // Panel near right edge: Settings shifts to the left
+        let rightPanel = NSRect(x: 1060, y: 200, width: 420, height: 520)
+        let leftOrigin = WindowFrameClamper.settingsOrigin(for: settingsSize, avoiding: rightPanel, in: mainVisible)
+        let leftRect = NSRect(origin: leftOrigin, size: settingsSize)
+        #expect(mainVisible.contains(leftRect))
+        #expect(!leftRect.intersects(rightPanel))
+        #expect(leftRect.maxX <= rightPanel.minX)
+
+        // Huge panel filling screen: falls back inside visibleFrame
+        let fullPanel = NSRect(x: 50, y: 50, width: 1400, height: 850)
+        let fallbackOrigin = WindowFrameClamper.settingsOrigin(for: settingsSize, avoiding: fullPanel, in: mainVisible)
+        let fallbackRect = NSRect(origin: fallbackOrigin, size: settingsSize)
+        #expect(mainVisible.contains(fallbackRect))
+    }
 }
 
 @Suite("NoteLibraryStore")
@@ -554,7 +581,10 @@ struct AppSettingsAndStylerTests {
         #expect(reloaded.neonAccent == .magenta)
         #expect(reloaded.fontFamily == "system-serif")
         #expect(reloaded.ghostOnUnfocus == true)
+        #expect(SurfaceStyle.allCases.count == 12)
         #expect(SurfaceStyle.warmPaper.isLight)
+        #expect(SurfaceStyle.coolMist.isLight)
+        #expect(SurfaceStyle.graphite.isOpaque)
         #expect(SurfaceStyle.charcoal.isOpaque)
         #expect(!SurfaceStyle.translucentHUD.isOpaque)
     }

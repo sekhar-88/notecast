@@ -52,6 +52,54 @@ public enum WindowFrameClamper {
         return clampToFrame(centered, within: fallbackVisibleFrame)
     }
 
+    /// Computes an origin for the Settings window outside `panelFrame` within `visibleFrame` whenever possible.
+    public static func settingsOrigin(
+        for settingsSize: NSSize,
+        avoiding panelFrame: NSRect,
+        in visibleFrame: NSRect,
+        gap: CGFloat = 16
+    ) -> NSPoint {
+        func clampedY(_ idealY: CGFloat) -> CGFloat {
+            let maxY = max(visibleFrame.minY, visibleFrame.maxY - settingsSize.height)
+            return min(max(idealY, visibleFrame.minY), maxY)
+        }
+
+        func clampedX(_ idealX: CGFloat) -> CGFloat {
+            let maxX = max(visibleFrame.minX, visibleFrame.maxX - settingsSize.width)
+            return min(max(idealX, visibleFrame.minX), maxX)
+        }
+
+        // 1. Right of floating panel
+        let rightX = panelFrame.maxX + gap
+        if rightX + settingsSize.width <= visibleFrame.maxX {
+            return NSPoint(x: rightX, y: clampedY(panelFrame.maxY - settingsSize.height))
+        }
+
+        // 2. Left of floating panel
+        let leftX = panelFrame.minX - settingsSize.width - gap
+        if leftX >= visibleFrame.minX {
+            return NSPoint(x: leftX, y: clampedY(panelFrame.maxY - settingsSize.height))
+        }
+
+        // 3. Below floating panel
+        let belowY = panelFrame.minY - settingsSize.height - gap
+        if belowY >= visibleFrame.minY {
+            return NSPoint(x: clampedX(panelFrame.midX - settingsSize.width * 0.5), y: belowY)
+        }
+
+        // 4. Above floating panel
+        let aboveY = panelFrame.maxY + gap
+        if aboveY + settingsSize.height <= visibleFrame.maxY {
+            return NSPoint(x: clampedX(panelFrame.midX - settingsSize.width * 0.5), y: aboveY)
+        }
+
+        // 5. Fallback: centered inside visible frame (window draws above floating panel via elevated level)
+        return NSPoint(
+            x: clampedX(visibleFrame.midX - settingsSize.width * 0.5),
+            y: clampedY(visibleFrame.midY - settingsSize.height * 0.5)
+        )
+    }
+
     private static func bestMatchingScreen(for frame: NSRect, in visibleFrames: [NSRect]) -> NSRect? {
         var bestScreen: NSRect?
         var bestArea: CGFloat = 0

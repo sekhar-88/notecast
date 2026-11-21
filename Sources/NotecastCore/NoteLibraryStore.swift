@@ -21,11 +21,11 @@ public struct NoteMetadata: Codable, Equatable, Identifiable, Sendable {
 public final class NoteLibraryStore: @unchecked Sendable {
     public static let defaultStarterContent = """
     # Notecast
-    Press **⌥ Space** anytime to show or hide this floating scratchpad.
+    Press **⌥⌘N** anytime to show or hide this floating scratchpad.
 
-    - [ ] Press **⌘P** to search notes or run app commands
+    - [ ] Press **⌘P** for search & commands, **⌘⇧P** for notes search
     - [ ] Press **⌘N** for a new note, **⌘L** to browse notes
-    - [x] Immersive black surface with active neon glow
+    - [x] Curated surfaces with active neon glow
     > Tip: Resize or drag the top bar — layout & notes auto-save.
     """
 

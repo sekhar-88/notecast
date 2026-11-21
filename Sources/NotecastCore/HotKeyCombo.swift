@@ -11,10 +11,10 @@ public struct HotKeyCombo: Codable, Equatable, Sendable {
         self.carbonModifiers = carbonModifiers & HotKeyCombo.supportedCarbonModifierMask
     }
 
-    /// Default global hotkey: `⌥ Space`.
+    /// Default global hotkey: `⌥⌘N`.
     public static let defaultToggle = HotKeyCombo(
-        keyCode: UInt32(kVK_Space),
-        carbonModifiers: UInt32(optionKey)
+        keyCode: UInt32(kVK_ANSI_N),
+        carbonModifiers: UInt32(optionKey | cmdKey)
     )
 
     private static let supportedCarbonModifierMask: UInt32 =

@@ -4,7 +4,7 @@ import Foundation
 public final class NoteStore: @unchecked Sendable {
     public static let defaultStarterContent = """
     # Notecast
-    Press **⌥ Space** anytime to show or hide this floating scratchpad.
+    Press **⌥⌘N** anytime to show or hide this floating scratchpad.
 
     - [ ] Jot down quick thoughts, links, or **tasks**
     - [x] Stays floating while you work underneath

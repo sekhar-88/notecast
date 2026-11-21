@@ -723,6 +723,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             controller.onFontFamilyChanged = { [weak self] family in
                 self?.updateFontFamily(family)
             }
+            controller.onFontFamilyPreview = { [weak self] family in
+                guard let self else { return }
+                self.panel.applyFont(family: family, size: self.settings.fontSize)
+            }
             controller.onFontSizeChanged = { [weak self] size in
                 self?.updateFontSize(size)
             }
@@ -741,6 +745,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             settingsController = controller
         }
 
-        settingsController?.showAndFocus()
+        if panel.isVisible && panel.isGhosted {
+            panel.setGhosted(false, animated: true)
+        }
+        settingsController?.showAndFocus(avoiding: panel.isVisible ? panel.frame : nil)
     }
 }

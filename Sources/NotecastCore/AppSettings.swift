@@ -4,21 +4,31 @@ import Foundation
 /// Controls the floating panel background theme (curated opaque dark/light surfaces or translucent HUD).
 public enum SurfaceStyle: String, Codable, CaseIterable, Sendable {
     case charcoal
+    case graphite
+    case immersiveBlack
     case midnightSlate
+    case deepIndigo
+    case nordicBlue
     case warmEspresso
     case deepForest
-    case immersiveBlack
+    case plumNoir
     case warmPaper
+    case coolMist
     case translucentHUD
 
     public var displayName: String {
         switch self {
-        case .charcoal: return "Charcoal (Opaque)"
+        case .charcoal: return "Charcoal"
+        case .graphite: return "Graphite"
+        case .immersiveBlack: return "Pure Black"
         case .midnightSlate: return "Midnight Slate"
+        case .deepIndigo: return "Deep Indigo"
+        case .nordicBlue: return "Nordic Blue"
         case .warmEspresso: return "Warm Espresso"
         case .deepForest: return "Deep Forest"
-        case .immersiveBlack: return "Pure Black"
-        case .warmPaper: return "Warm Paper (Light)"
+        case .plumNoir: return "Plum Noir"
+        case .warmPaper: return "Warm Paper"
+        case .coolMist: return "Cool Mist"
         case .translucentHUD: return "Translucent HUD"
         }
     }
@@ -28,23 +38,33 @@ public enum SurfaceStyle: String, Codable, CaseIterable, Sendable {
     }
 
     public var isLight: Bool {
-        self == .warmPaper
+        self == .warmPaper || self == .coolMist
     }
 
     public var backgroundColor: NSColor? {
         switch self {
         case .charcoal:
             return NSColor(srgbRed: 0x14 / 255.0, green: 0x15 / 255.0, blue: 0x19 / 255.0, alpha: 1.0)
+        case .graphite:
+            return NSColor(srgbRed: 0x22 / 255.0, green: 0x24 / 255.0, blue: 0x2A / 255.0, alpha: 1.0)
+        case .immersiveBlack:
+            return NSColor.black
         case .midnightSlate:
             return NSColor(srgbRed: 0x17 / 255.0, green: 0x1C / 255.0, blue: 0x26 / 255.0, alpha: 1.0)
+        case .deepIndigo:
+            return NSColor(srgbRed: 0x19 / 255.0, green: 0x17 / 255.0, blue: 0x2B / 255.0, alpha: 1.0)
+        case .nordicBlue:
+            return NSColor(srgbRed: 0x1D / 255.0, green: 0x27 / 255.0, blue: 0x33 / 255.0, alpha: 1.0)
         case .warmEspresso:
             return NSColor(srgbRed: 0x1A / 255.0, green: 0x17 / 255.0, blue: 0x15 / 255.0, alpha: 1.0)
         case .deepForest:
             return NSColor(srgbRed: 0x12 / 255.0, green: 0x1A / 255.0, blue: 0x17 / 255.0, alpha: 1.0)
-        case .immersiveBlack:
-            return NSColor.black
+        case .plumNoir:
+            return NSColor(srgbRed: 0x1F / 255.0, green: 0x15 / 255.0, blue: 0x20 / 255.0, alpha: 1.0)
         case .warmPaper:
             return NSColor(srgbRed: 0xF7 / 255.0, green: 0xF5 / 255.0, blue: 0xF0 / 255.0, alpha: 1.0)
+        case .coolMist:
+            return NSColor(srgbRed: 0xEE / 255.0, green: 0xF2 / 255.0, blue: 0xF6 / 255.0, alpha: 1.0)
         case .translucentHUD:
             return nil
         }
@@ -54,16 +74,26 @@ public enum SurfaceStyle: String, Codable, CaseIterable, Sendable {
         switch self {
         case .charcoal:
             return NSColor(srgbRed: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x24 / 255.0, alpha: 1.0)
+        case .graphite:
+            return NSColor(srgbRed: 0x2B / 255.0, green: 0x2E / 255.0, blue: 0x36 / 255.0, alpha: 1.0)
+        case .immersiveBlack:
+            return NSColor(srgbRed: 0x08 / 255.0, green: 0x08 / 255.0, blue: 0x0C / 255.0, alpha: 1.0)
         case .midnightSlate:
             return NSColor(srgbRed: 0x1E / 255.0, green: 0x25 / 255.0, blue: 0x33 / 255.0, alpha: 1.0)
+        case .deepIndigo:
+            return NSColor(srgbRed: 0x22 / 255.0, green: 0x1F / 255.0, blue: 0x38 / 255.0, alpha: 1.0)
+        case .nordicBlue:
+            return NSColor(srgbRed: 0x25 / 255.0, green: 0x31 / 255.0, blue: 0x40 / 255.0, alpha: 1.0)
         case .warmEspresso:
             return NSColor(srgbRed: 0x22 / 255.0, green: 0x1E / 255.0, blue: 0x1B / 255.0, alpha: 1.0)
         case .deepForest:
             return NSColor(srgbRed: 0x18 / 255.0, green: 0x23 / 255.0, blue: 0x1F / 255.0, alpha: 1.0)
-        case .immersiveBlack:
-            return NSColor(srgbRed: 0x08 / 255.0, green: 0x08 / 255.0, blue: 0x0C / 255.0, alpha: 1.0)
+        case .plumNoir:
+            return NSColor(srgbRed: 0x2A / 255.0, green: 0x1D / 255.0, blue: 0x2B / 255.0, alpha: 1.0)
         case .warmPaper:
             return NSColor(srgbRed: 0xEF / 255.0, green: 0xEC / 255.0, blue: 0xE4 / 255.0, alpha: 1.0)
+        case .coolMist:
+            return NSColor(srgbRed: 0xE3 / 255.0, green: 0xE9 / 255.0, blue: 0xF0 / 255.0, alpha: 1.0)
         case .translucentHUD:
             return nil
         }
@@ -73,41 +103,49 @@ public enum SurfaceStyle: String, Codable, CaseIterable, Sendable {
         switch self {
         case .charcoal:
             return NSColor(srgbRed: 0x19 / 255.0, green: 0x1B / 255.0, blue: 0x22 / 255.0, alpha: 0.98)
+        case .graphite:
+            return NSColor(srgbRed: 0x26 / 255.0, green: 0x29 / 255.0, blue: 0x30 / 255.0, alpha: 0.98)
+        case .immersiveBlack:
+            return NSColor(srgbRed: 0x0B / 255.0, green: 0x0B / 255.0, blue: 0x10 / 255.0, alpha: 0.98)
         case .midnightSlate:
             return NSColor(srgbRed: 0x1B / 255.0, green: 0x21 / 255.0, blue: 0x2E / 255.0, alpha: 0.98)
+        case .deepIndigo:
+            return NSColor(srgbRed: 0x1E / 255.0, green: 0x1B / 255.0, blue: 0x33 / 255.0, alpha: 0.98)
+        case .nordicBlue:
+            return NSColor(srgbRed: 0x21 / 255.0, green: 0x2C / 255.0, blue: 0x3A / 255.0, alpha: 0.98)
         case .warmEspresso:
             return NSColor(srgbRed: 0x1F / 255.0, green: 0x1B / 255.0, blue: 0x18 / 255.0, alpha: 0.98)
         case .deepForest:
             return NSColor(srgbRed: 0x16 / 255.0, green: 0x20 / 255.0, blue: 0x1C / 255.0, alpha: 0.98)
-        case .immersiveBlack:
-            return NSColor(srgbRed: 0x0B / 255.0, green: 0x0B / 255.0, blue: 0x10 / 255.0, alpha: 0.98)
+        case .plumNoir:
+            return NSColor(srgbRed: 0x25 / 255.0, green: 0x19 / 255.0, blue: 0x26 / 255.0, alpha: 0.98)
         case .warmPaper:
             return NSColor(srgbRed: 0xFB / 255.0, green: 0xF9 / 255.0, blue: 0xF5 / 255.0, alpha: 0.98)
+        case .coolMist:
+            return NSColor(srgbRed: 0xF5 / 255.0, green: 0xF8 / 255.0, blue: 0xFB / 255.0, alpha: 0.98)
         case .translucentHUD:
             return NSColor.windowBackgroundColor.withAlphaComponent(0.95)
         }
     }
 
     public var calmBorderColor: NSColor {
-        switch self {
-        case .translucentHUD:
+        if self == .translucentHUD {
             return NSColor.separatorColor.withAlphaComponent(0.55)
-        case .warmPaper:
-            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.14)
-        default:
-            return NSColor(white: 1.0, alpha: 0.14)
         }
+        if isLight {
+            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.14)
+        }
+        return NSColor(white: 1.0, alpha: 0.14)
     }
 
     public var calmSeparatorColor: NSColor {
-        switch self {
-        case .translucentHUD:
+        if self == .translucentHUD {
             return NSColor.separatorColor.withAlphaComponent(0.35)
-        case .warmPaper:
-            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.10)
-        default:
-            return NSColor(white: 1.0, alpha: 0.12)
         }
+        if isLight {
+            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.10)
+        }
+        return NSColor(white: 1.0, alpha: 0.12)
     }
 
     public func next() -> SurfaceStyle {
