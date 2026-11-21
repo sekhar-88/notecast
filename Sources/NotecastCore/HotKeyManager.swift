@@ -3,14 +3,18 @@ import Foundation
 
 private let notecastHotKeySignature: OSType = 0x4E43_5354 // 'NCST'
 private let notecastHotKeyID: UInt32 = 1
+private let notecastPreferencesHotKeyID: UInt32 = 2
 
 /// Manages global hotkey registration via Carbon `RegisterEventHotKey` (no Accessibility permissions required).
 @MainActor
 public final class HotKeyManager {
     public var onHotKeyPressed: (() -> Void)?
+    public var onPreferencesHotKeyPressed: (() -> Void)?
     public private(set) var activeCombo: HotKeyCombo?
+    public private(set) var activePreferencesCombo: HotKeyCombo?
 
     private nonisolated(unsafe) var hotKeyRef: EventHotKeyRef?
+    private nonisolated(unsafe) var preferencesHotKeyRef: EventHotKeyRef?
     private nonisolated(unsafe) var eventHandlerRef: EventHandlerRef?
     private var isSuspended = false
 
@@ -22,12 +26,15 @@ public final class HotKeyManager {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
         }
+        if let preferencesHotKeyRef {
+            UnregisterEventHotKey(preferencesHotKeyRef)
+        }
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
         }
     }
 
-    /// Registers a global hotkey, replacing any existing registration.
+    /// Registers the primary toggle global hotkey, replacing any existing registration.
     @discardableResult
     public func register(_ combo: HotKeyCombo) -> OSStatus {
         installHandlerIfNeeded()
@@ -55,30 +62,63 @@ public final class HotKeyManager {
         return status
     }
 
-    /// Unregisters the active hotkey and clears `activeCombo`.
+    /// Registers the secondary global hotkey for opening Preferences.
+    @discardableResult
+    public func registerPreferences(_ combo: HotKeyCombo) -> OSStatus {
+        installHandlerIfNeeded()
+        unregisterPreferencesHotKeyOnly()
+
+        var ref: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: notecastHotKeySignature, id: notecastPreferencesHotKeyID)
+        let status = RegisterEventHotKey(
+            combo.keyCode,
+            combo.carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &ref
+        )
+
+        if status == noErr, let ref {
+            preferencesHotKeyRef = ref
+            activePreferencesCombo = combo
+        } else {
+            preferencesHotKeyRef = nil
+        }
+
+        return status
+    }
+
+    /// Unregisters all active hotkeys and clears stored combos.
     public func unregister() {
         unregisterHotKeyOnly()
+        unregisterPreferencesHotKeyOnly()
         activeCombo = nil
+        activePreferencesCombo = nil
         isSuspended = false
     }
 
-    /// Temporarily unregisters the hotkey while recording a new shortcut.
+    /// Temporarily unregisters active hotkeys while recording a new shortcut.
     public func suspend() {
         guard !isSuspended else { return }
         isSuspended = true
         unregisterHotKeyOnly()
+        unregisterPreferencesHotKeyOnly()
     }
 
-    /// Restores the previously active hotkey if still suspended.
+    /// Restores previously active hotkeys if still suspended.
     public func resume() {
         guard isSuspended else { return }
         isSuspended = false
         if hotKeyRef == nil, let combo = activeCombo {
             _ = register(combo)
         }
+        if preferencesHotKeyRef == nil, let prefCombo = activePreferencesCombo {
+            _ = registerPreferences(prefCombo)
+        }
     }
 
-    /// Unregisters hotkey and removes the Carbon event handler on app termination.
+    /// Unregisters hotkeys and removes the Carbon event handler on app termination.
     public func teardown() {
         unregister()
         if let eventHandlerRef {
@@ -91,6 +131,13 @@ public final class HotKeyManager {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
+        }
+    }
+
+    private func unregisterPreferencesHotKeyOnly() {
+        if let preferencesHotKeyRef {
+            UnregisterEventHotKey(preferencesHotKeyRef)
+            self.preferencesHotKeyRef = nil
         }
     }
 
@@ -115,14 +162,19 @@ public final class HotKeyManager {
     }
 
     fileprivate func handleHotKeyEvent(_ hotKeyID: EventHotKeyID) -> OSStatus {
-        guard hotKeyID.signature == notecastHotKeySignature,
-              hotKeyID.id == notecastHotKeyID,
-              !isSuspended
-        else {
+        guard hotKeyID.signature == notecastHotKeySignature, !isSuspended else {
             return OSStatus(eventNotHandledErr)
         }
-        onHotKeyPressed?()
-        return noErr
+        switch hotKeyID.id {
+        case notecastHotKeyID:
+            onHotKeyPressed?()
+            return noErr
+        case notecastPreferencesHotKeyID:
+            onPreferencesHotKeyPressed?()
+            return noErr
+        default:
+            return OSStatus(eventNotHandledErr)
+        }
     }
 }
 

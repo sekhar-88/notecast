@@ -206,6 +206,7 @@ public final class AppSettings {
         static let fontFamily = "notecast.fontFamily"
         static let ghostOnUnfocus = "notecast.ghostOnUnfocus"
         static let ghostWakeZoneFraction = "notecast.ghostWakeZoneFraction"
+        static let hasSeenOnboardingGuide = "notecast.hasSeenOnboardingGuide"
     }
 
     public static let minOpacity: Double = 0.65
@@ -216,9 +217,9 @@ public final class AppSettings {
     public static let maxFontSize: CGFloat = 26
     public static let defaultFontSize: CGFloat = 14
 
-    public static let minGhostWakeZoneFraction: Double = 0.15
-    public static let maxGhostWakeZoneFraction: Double = 1.0
-    public static let defaultGhostWakeZoneFraction: Double = 0.45
+    public nonisolated static let minGhostWakeZoneFraction: Double = 0.15
+    public nonisolated static let maxGhostWakeZoneFraction: Double = 1.0
+    public nonisolated static let defaultGhostWakeZoneFraction: Double = 0.45
 
     private let defaults: UserDefaults
 
@@ -393,7 +394,16 @@ public final class AppSettings {
         }
     }
 
-    public static func clampGhostWakeZoneFraction(_ value: Double) -> Double {
+    public var hasSeenOnboardingGuide: Bool {
+        get {
+            defaults.bool(forKey: Keys.hasSeenOnboardingGuide)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.hasSeenOnboardingGuide)
+        }
+    }
+
+    public nonisolated static func clampGhostWakeZoneFraction(_ value: Double) -> Double {
         min(max(value, minGhostWakeZoneFraction), maxGhostWakeZoneFraction)
     }
 

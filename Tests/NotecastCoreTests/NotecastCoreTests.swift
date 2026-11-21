@@ -64,9 +64,10 @@ struct NoteStoreTests {
 
 @Suite("HotKeyCombo")
 struct HotKeyComboTests {
-    @Test("Default hotkey display string is ⌥⌘N")
+    @Test("Default hotkey display string is ⌥⌘N and preferences is ⌥⌘,")
     func defaultDisplayString() {
         #expect(HotKeyCombo.defaultToggle.displayString == "⌥⌘N")
+        #expect(HotKeyCombo.defaultPreferences.displayString == "⌥⌘,")
     }
 
     @Test("Validates modifier and key combinations")
@@ -378,6 +379,51 @@ struct WindowFrameClamperTests {
         let fallbackRect = NSRect(origin: fallbackOrigin, size: settingsSize)
         #expect(mainVisible.contains(fallbackRect))
     }
+
+    @Test("Keeps ghost wake zone accessible when dragged off-screen")
+    func ensuresWakeZoneAccessible() {
+        let onScreen = NSRect(x: 300, y: 200, width: 420, height: 520)
+        let untouched = WindowFrameClamper.ensureWakeZoneAccessible(
+            onScreen,
+            wakeZoneFraction: 0.45,
+            to: [mainVisible],
+            fallbackVisibleFrame: mainVisible
+        )
+        #expect(untouched == onScreen)
+
+        // Dragged off right edge so wake zone is unreachable -> snaps right edge safely inside screen
+        let offRight = NSRect(x: 1380, y: 200, width: 420, height: 520)
+        let adjustedRight = WindowFrameClamper.ensureWakeZoneAccessible(
+            offRight,
+            wakeZoneFraction: 0.45,
+            to: [mainVisible],
+            fallbackVisibleFrame: mainVisible,
+            lastSafeFrame: onScreen
+        )
+        #expect(adjustedRight.maxX <= mainVisible.maxX)
+        #expect(adjustedRight.maxX >= mainVisible.maxX - 16)
+
+        // Dragged completely off all screens -> restores lastSafeFrame
+        let completelyOff = NSRect(x: -1200, y: -1200, width: 420, height: 520)
+        let restoredSafe = WindowFrameClamper.ensureWakeZoneAccessible(
+            completelyOff,
+            wakeZoneFraction: 0.45,
+            to: [mainVisible],
+            fallbackVisibleFrame: mainVisible,
+            lastSafeFrame: onScreen
+        )
+        #expect(restoredSafe == onScreen)
+
+        // Completely off without lastSafeFrame -> clamps into fallback visible frame
+        let restoredFallback = WindowFrameClamper.ensureWakeZoneAccessible(
+            completelyOff,
+            wakeZoneFraction: 0.45,
+            to: [mainVisible],
+            fallbackVisibleFrame: mainVisible,
+            lastSafeFrame: nil
+        )
+        #expect(mainVisible.contains(restoredFallback))
+    }
 }
 
 @Suite("NoteLibraryStore")
@@ -569,6 +615,7 @@ struct AppSettingsAndStylerTests {
         #expect(settings.fontFamily == "system")
         #expect(settings.ghostOnUnfocus == false)
         #expect(settings.ghostWakeZoneFraction == AppSettings.defaultGhostWakeZoneFraction)
+        #expect(settings.hasSeenOnboardingGuide == false)
 
         settings.surfaceStyle = .midnightSlate
         settings.neonGlowEnabled = false
@@ -576,6 +623,7 @@ struct AppSettingsAndStylerTests {
         settings.fontFamily = "system-serif"
         settings.ghostOnUnfocus = true
         settings.ghostWakeZoneFraction = 0.30
+        settings.hasSeenOnboardingGuide = true
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.surfaceStyle == .midnightSlate)
@@ -583,6 +631,7 @@ struct AppSettingsAndStylerTests {
         #expect(reloaded.neonAccent == .magenta)
         #expect(reloaded.fontFamily == "system-serif")
         #expect(reloaded.ghostOnUnfocus == true)
+        #expect(reloaded.hasSeenOnboardingGuide == true)
         #expect(abs(reloaded.ghostWakeZoneFraction - 0.30) < 0.0001)
 
         reloaded.ghostWakeZoneFraction = 0.02

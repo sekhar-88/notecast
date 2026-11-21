@@ -12,7 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var panel: FloatingNotepadPanel!
     private var statusItem: NSStatusItem!
     private var settingsController: SettingsWindowController?
+    private var guideController: VioletGuideWindowController?
     private var previousApp: NSRunningApplication?
+    private var lastSafePanelFrame: NSRect?
+    private var screenObserver: NSObjectProtocol?
 
     private var toggleMenuItem: NSMenuItem!
     private var backgroundMenuItems: [SurfaceStyle: NSMenuItem] = [:]
@@ -25,7 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         setupPanel()
         setupStatusItem()
         setupHotKey()
+        observeScreenChanges()
         showPanel()
+
+        if !settings.hasSeenOnboardingGuide {
+            settings.hasSeenOnboardingGuide = true
+            openGuide(mode: .welcome)
+        }
     }
 
     func applicationWillResignActive(_ notification: Notification) {
@@ -35,6 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+            self.screenObserver = nil
+        }
         if let activeNoteID {
             try? noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
         }
@@ -49,7 +62,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Application menu
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        let guideMenuItem = appMenu.addItem(
+            withTitle: "Quick Guide & Shortcuts…",
+            action: #selector(handleOpenGuideFromMenu),
+            keyEquivalent: "?"
+        )
+        guideMenuItem.target = self
+        let settingsMenuItem = appMenu.addItem(
+            withTitle: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        )
+        settingsMenuItem.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Notecast", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
@@ -73,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func setupPanel() {
         let initialFrame = resolvedPanelFrame()
+        lastSafePanelFrame = initialFrame
 
         panel = FloatingNotepadPanel(
             contentRect: initialFrame,
@@ -148,6 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             self?.openSettings()
         }
 
+        panel.onOpenGuide = { [weak self] in
+            self?.openGuide(mode: .instructions)
+        }
+
         panel.onRequestHide = { [weak self] in
             self?.hidePanel()
         }
@@ -169,11 +198,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         panel.onShouldAllowGhostMode = { [weak self] in
-            !(self?.settingsController?.window?.isVisible ?? false)
+            let settingsOpen = self?.settingsController?.window?.isVisible ?? false
+            let guideOpen = self?.guideController?.window?.isVisible ?? false
+            return !settingsOpen && !guideOpen
         }
 
         panel.onWakeFromGhost = { [weak self] in
             self?.showPanel()
+        }
+
+        panel.onGhostDragEnded = { [weak self] in
+            self?.ensureGhostWakeZoneAccessible(animated: true)
+        }
+
+        panel.onShouldEnsureWakeZoneOnScreen = { [weak self] in
+            self?.ensureGhostWakeZoneAccessible(animated: true)
         }
 
         panel.notesListView.onSelectNote = { [weak self] noteID in
@@ -323,6 +362,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         revealItem.target = self
         menu.addItem(revealItem)
 
+        let guideItem = NSMenuItem(
+            title: "Quick Guide & Shortcuts",
+            action: #selector(handleOpenGuideFromMenu),
+            keyEquivalent: "?"
+        )
+        guideItem.target = self
+        menu.addItem(guideItem)
+
         let settingsItem = NSMenuItem(
             title: "Settings…",
             action: #selector(openSettings),
@@ -347,10 +394,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         hotKeyManager.onHotKeyPressed = { [weak self] in
             self?.togglePanel()
         }
+        hotKeyManager.onPreferencesHotKeyPressed = { [weak self] in
+            self?.openSettings()
+        }
         let status = hotKeyManager.register(settings.hotKey)
         if status != noErr {
             if settings.hotKey != .defaultToggle {
                 _ = hotKeyManager.register(.defaultToggle)
+            }
+        }
+        _ = hotKeyManager.registerPreferences(.defaultPreferences)
+    }
+
+    private func observeScreenChanges() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.panel.isVisible && self.panel.isGhosted else { return }
+                self.ensureGhostWakeZoneAccessible(animated: true)
             }
         }
     }
@@ -390,7 +454,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.setGhosted(false, animated: false)
 
         let settingsVisible = settingsController?.window?.isVisible ?? false
-        if NSApp.isActive, !settingsVisible {
+        let guideVisible = guideController?.window?.isVisible ?? false
+        if NSApp.isActive, !settingsVisible, !guideVisible {
             previousApp?.activate(options: [])
         }
     }
@@ -577,6 +642,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func updateGhostWakeZoneFraction(_ fraction: Double, previewOverlay: Bool) {
         settings.ghostWakeZoneFraction = fraction
         panel.applyGhostWakeZoneFraction(fraction, previewOverlay: previewOverlay)
+        if !previewOverlay && panel.isGhosted {
+            ensureGhostWakeZoneAccessible(animated: true)
+        }
     }
 
     private func updateHotKey(_ combo: HotKeyCombo) -> OSStatus {
@@ -620,11 +688,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func windowDidMove(_ notification: Notification) {
         guard (notification.object as? NSWindow) === panel else { return }
         settings.savedWindowFrame = panel.frame
+        recordSafeFrameIfAccessible(panel.frame)
     }
 
     func windowDidResize(_ notification: Notification) {
         guard (notification.object as? NSWindow) === panel else { return }
         settings.savedWindowFrame = panel.frame
+        recordSafeFrameIfAccessible(panel.frame)
+    }
+
+    private func currentVisibleScreenBounds() -> (screens: [NSRect], fallback: NSRect) {
+        let screens = NSScreen.screens.map(\.visibleFrame)
+        let fallback = NSScreen.main?.visibleFrame
+            ?? screens.first
+            ?? NSRect(x: 100, y: 100, width: 1280, height: 800)
+        return (screens.isEmpty ? [fallback] : screens, fallback)
+    }
+
+    private func recordSafeFrameIfAccessible(_ frame: NSRect) {
+        let bounds = currentVisibleScreenBounds()
+        let checked = WindowFrameClamper.ensureWakeZoneAccessible(
+            frame,
+            wakeZoneFraction: settings.ghostWakeZoneFraction,
+            to: bounds.screens,
+            fallbackVisibleFrame: bounds.fallback,
+            lastSafeFrame: lastSafePanelFrame
+        )
+        if checked == frame {
+            lastSafePanelFrame = frame
+        }
+    }
+
+    private func ensureGhostWakeZoneAccessible(animated: Bool) {
+        let current = panel.frame
+        let bounds = currentVisibleScreenBounds()
+        let adjusted = WindowFrameClamper.ensureWakeZoneAccessible(
+            current,
+            wakeZoneFraction: settings.ghostWakeZoneFraction,
+            to: bounds.screens,
+            fallbackVisibleFrame: bounds.fallback,
+            lastSafeFrame: lastSafePanelFrame
+        )
+        lastSafePanelFrame = adjusted
+        if adjusted != current {
+            panel.setFrame(adjusted, display: true, animate: animated)
+            settings.savedWindowFrame = adjusted
+        }
     }
 
     // MARK: - NSMenuDelegate
@@ -760,5 +869,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             panel.setGhosted(false, animated: true)
         }
         settingsController?.showAndFocus(avoiding: panel.isVisible ? panel.frame : nil)
+    }
+
+    @objc private func handleOpenGuideFromMenu() {
+        openGuide(mode: .instructions)
+    }
+
+    private func openGuide(mode: VioletGuideWindowController.Mode) {
+        if guideController == nil {
+            let controller = VioletGuideWindowController(mode: mode)
+            controller.onOpenSettings = { [weak self] in
+                self?.openSettings()
+            }
+            controller.onDismissToEditor = { [weak self] in
+                guard let self else { return }
+                if self.panel.isVisible {
+                    self.panel.makeKeyAndOrderFront(nil)
+                    self.panel.dismissOverlaysAndFocusEditor()
+                }
+            }
+            guideController = controller
+        }
+
+        if panel.isVisible && panel.isGhosted {
+            panel.setGhosted(false, animated: true)
+        }
+        guideController?.show(mode: mode, avoiding: panel.isVisible ? panel.frame : nil)
     }
 }

@@ -100,6 +100,94 @@ public enum WindowFrameClamper {
         )
     }
 
+    /// Ensures the Ghost Outline Mode wake/drag handle stays reachable on screen, pulling partially off-screen
+    /// windows back into view or reverting to `lastSafeFrame` / fallback if dragged completely off-screen.
+    public static func ensureWakeZoneAccessible(
+        _ frame: NSRect,
+        wakeZoneFraction: Double,
+        to visibleFrames: [NSRect],
+        fallbackVisibleFrame: NSRect,
+        lastSafeFrame: NSRect? = nil,
+        minVisibleWidth: CGFloat = 32,
+        minVisibleHeight: CGFloat = 48
+    ) -> NSRect {
+        let fraction = CGFloat(AppSettings.clampGhostWakeZoneFraction(wakeZoneFraction))
+
+        func clickableCoreRect(for candidate: NSRect) -> NSRect {
+            let wakeWidth = candidate.width * fraction
+            let coreWidth = min(wakeWidth, max(24, wakeWidth * 0.8))
+            return NSRect(
+                x: candidate.maxX - coreWidth,
+                y: candidate.minY,
+                width: coreWidth,
+                height: candidate.height
+            )
+        }
+
+        func isAccessible(_ candidate: NSRect) -> Bool {
+            let core = clickableCoreRect(for: candidate)
+            let reqW = min(minVisibleWidth, core.width)
+            let reqH = min(minVisibleHeight, core.height)
+            return visibleFrames.contains { screen in
+                let hit = core.intersection(screen)
+                return !hit.isNull && hit.width >= reqW && hit.height >= reqH
+            }
+        }
+
+        if isAccessible(frame) {
+            return frame
+        }
+
+        var bestScreen: NSRect?
+        var bestArea: CGFloat = 0
+        for screen in visibleFrames {
+            let intersection = frame.intersection(screen)
+            guard !intersection.isNull else { continue }
+            let area = intersection.width * intersection.height
+            if area > bestArea {
+                bestArea = area
+                bestScreen = screen
+            }
+        }
+
+        if let screen = bestScreen {
+            var result = frame
+            if result.width > screen.width {
+                result.size.width = max(minSize.width, screen.width)
+            }
+            if result.height > screen.height {
+                result.size.height = max(minSize.height, screen.height)
+            }
+
+            let wakeWidth = result.width * fraction
+            let maxOriginX = screen.maxX - 8 - result.width
+            let minOriginX = screen.minX + 8 - (result.width - wakeWidth)
+            if minOriginX <= maxOriginX {
+                result.origin.x = min(max(result.origin.x, minOriginX), maxOriginX)
+            } else {
+                result.origin.x = max(screen.minX, min(result.origin.x, screen.maxX - result.width))
+            }
+
+            if result.maxY > screen.maxY {
+                result.origin.y = screen.maxY - result.height
+            }
+            let reqH = min(minVisibleHeight, result.height)
+            if result.maxY < screen.minY + reqH {
+                result.origin.y = screen.minY + reqH - result.height
+            }
+
+            if isAccessible(result) {
+                return result
+            }
+        }
+
+        if let safe = lastSafeFrame, isAccessible(safe) {
+            return safe
+        }
+
+        return clamp(frame, to: visibleFrames, fallbackVisibleFrame: fallbackVisibleFrame)
+    }
+
     private static func bestMatchingScreen(for frame: NSRect, in visibleFrames: [NSRect]) -> NSRect? {
         var bestScreen: NSRect?
         var bestArea: CGFloat = 0

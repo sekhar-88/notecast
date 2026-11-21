@@ -13,6 +13,7 @@ final class FloatingNotepadPanel: NSPanel {
     let commandPaletteView = CommandPaletteView()
 
     var onTogglePin: (() -> Void)?
+    var onOpenGuide: (() -> Void)?
     var onOpenSettings: (() -> Void)?
     var onRequestHide: (() -> Void)?
     var onNewNote: (() -> Void)?
@@ -21,6 +22,8 @@ final class FloatingNotepadPanel: NSPanel {
     var onToggleNotesSearch: (() -> Void)?
     var onShouldAllowGhostMode: (() -> Bool)?
     var onWakeFromGhost: (() -> Void)?
+    var onGhostDragEnded: (() -> Void)?
+    var onShouldEnsureWakeZoneOnScreen: (() -> Void)?
 
     private(set) var activePaletteMode: PaletteMode = .all
     private(set) var isGhosted = false
@@ -41,6 +44,7 @@ final class FloatingNotepadPanel: NSPanel {
     private let searchButton: NSButton
     private let newNoteButton: NSButton
     private let pinButton: NSButton
+    private let helpButton: NSButton
     private let settingsButton: NSButton
     private let hideButton: NSButton
 
@@ -115,6 +119,9 @@ final class FloatingNotepadPanel: NSPanel {
         self.searchButton = Self.makeHeaderButton(symbolName: "magnifyingglass", accessibilityLabel: "Search & Commands")
         self.newNoteButton = Self.makeHeaderButton(symbolName: "square.and.pencil", accessibilityLabel: "New Note")
         self.pinButton = Self.makeHeaderButton(symbolName: "pin.fill", accessibilityLabel: "Toggle Always on Top")
+        self.helpButton = Self.makeHeaderButton(symbolName: "questionmark.circle.fill", accessibilityLabel: "Instructions & Shortcuts")
+        self.helpButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
+        self.helpButton.contentTintColor = NSColor(srgbRed: 0.72, green: 0.36, blue: 1.0, alpha: 0.95)
         self.settingsButton = Self.makeHeaderButton(symbolName: "gearshape", accessibilityLabel: "Settings")
         self.hideButton = Self.makeHeaderButton(symbolName: "xmark", accessibilityLabel: "Hide Notecast")
 
@@ -138,6 +145,7 @@ final class FloatingNotepadPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     override func becomeKey() {
+        guard !isGhosted else { return }
         super.becomeKey()
         isPanelActive = true
         setGhosted(false, animated: true)
@@ -179,12 +187,19 @@ final class FloatingNotepadPanel: NSPanel {
             case ",":
                 onOpenSettings?()
                 return true
+            case "?":
+                onOpenGuide?()
+                return true
             default:
                 break
             }
         } else if modifiers == [.command, .shift] {
             if key == "p" {
                 onToggleNotesSearch?()
+                return true
+            }
+            if key == "/" || key == "?" {
+                onOpenGuide?()
                 return true
             }
         }
@@ -311,9 +326,11 @@ final class FloatingNotepadPanel: NSPanel {
 
     func setGhosted(_ ghosted: Bool, animated: Bool) {
         isGhosted = ghosted
+        becomesKeyOnlyIfNeeded = ghosted
         contentWrapperView.isGhosted = ghosted
 
         if ghosted {
+            onShouldEnsureWakeZoneOnScreen?()
             hudEffectView.isHidden = true
             rootContainer.layer?.backgroundColor = NSColor.clear.cgColor
             hasShadow = false
@@ -473,7 +490,8 @@ final class FloatingNotepadPanel: NSPanel {
         notesListButton.toolTip = "Notes List (⌘L)"
         searchButton.toolTip = "Search & Commands (⌘P) · Notes Only (⌘⇧P)"
         newNoteButton.toolTip = "New Note (⌘N)"
-        settingsButton.toolTip = "Settings (⌘,)"
+        helpButton.toolTip = "Instructions & Shortcuts (⌘?)"
+        settingsButton.toolTip = "Settings (⌘, · Global ⌥⌘,)"
         hideButton.toolTip = "Hide"
 
         let rightStack = NSStackView(views: [
@@ -482,6 +500,7 @@ final class FloatingNotepadPanel: NSPanel {
             searchButton,
             newNoteButton,
             pinButton,
+            helpButton,
             settingsButton,
             hideButton
         ])
@@ -564,6 +583,8 @@ final class FloatingNotepadPanel: NSPanel {
             newNoteButton.heightAnchor.constraint(equalToConstant: 22),
             pinButton.widthAnchor.constraint(equalToConstant: 22),
             pinButton.heightAnchor.constraint(equalToConstant: 22),
+            helpButton.widthAnchor.constraint(equalToConstant: 22),
+            helpButton.heightAnchor.constraint(equalToConstant: 22),
             settingsButton.widthAnchor.constraint(equalToConstant: 22),
             settingsButton.heightAnchor.constraint(equalToConstant: 22),
             hideButton.widthAnchor.constraint(equalToConstant: 22),
@@ -614,6 +635,9 @@ final class FloatingNotepadPanel: NSPanel {
         pinButton.target = self
         pinButton.action = #selector(handlePinTapped)
 
+        helpButton.target = self
+        helpButton.action = #selector(handleHelpTapped)
+
         settingsButton.target = self
         settingsButton.action = #selector(handleSettingsTapped)
 
@@ -622,6 +646,9 @@ final class FloatingNotepadPanel: NSPanel {
 
         ghostWakeZoneView.onWake = { [weak self] in
             self?.onWakeFromGhost?()
+        }
+        ghostWakeZoneView.onDragEnded = { [weak self] in
+            self?.onGhostDragEnded?()
         }
     }
 
@@ -675,6 +702,10 @@ final class FloatingNotepadPanel: NSPanel {
         onTogglePin?()
     }
 
+    @objc private func handleHelpTapped() {
+        onOpenGuide?()
+    }
+
     @objc private func handleSettingsTapped() {
         onOpenSettings?()
     }
@@ -696,6 +727,11 @@ final class FloatingNotepadPanel: NSPanel {
     }
 }
 
+/// Non-interactive subview that delegates all hits to its parent view.
+private final class PassThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Wrapper container that forwards hits normally when awake and passes interior clicks through when ghosted.
 private final class GhostContentWrapperView: NSView {
     var isGhosted = false
@@ -708,15 +744,22 @@ private final class GhostContentWrapperView: NSView {
 /// Feathered right-side dual-tone click-to-wake zone in Ghost Outline Mode; fades smoothly from 0 alpha so the left side remains click-through.
 private final class GhostWakeZoneView: NSView {
     var onWake: (() -> Void)?
+    var onDragEnded: (() -> Void)?
 
     private let contrastGradientLayer = CAGradientLayer()
     private let accentGradientLayer = CAGradientLayer()
-    private let gripPill = NSView()
+    private let gripPill = PassThroughView()
     private var trackingArea: NSTrackingArea?
 
     private var neonGlowEnabled = true
     private var accentColor = NeonAccent.cyan.nsColor
     private var isHovered = false
+
+    private var isTrackingPress = false
+    private var dragStartScreenPoint: NSPoint?
+    private var dragStartWindowOrigin: NSPoint?
+    private var didDragDuringPress = false
+    private let dragThreshold: CGFloat = 3.0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -768,50 +811,61 @@ private final class GhostWakeZoneView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard let window else {
-            onWake?()
+        dragStartScreenPoint = NSEvent.mouseLocation
+        dragStartWindowOrigin = window?.frame.origin
+        didDragDuringPress = false
+        isTrackingPress = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isTrackingPress,
+              let window,
+              let startMouse = dragStartScreenPoint,
+              let startOrigin = dragStartWindowOrigin
+        else {
             return
         }
 
-        let startMouse = NSEvent.mouseLocation
-        let startOrigin = window.frame.origin
-        let dragThreshold: CGFloat = 4.0
-        var didDrag = false
-        var completedClick = false
+        let currentMouse = NSEvent.mouseLocation
+        let dx = currentMouse.x - startMouse.x
+        let dy = currentMouse.y - startMouse.y
+        if !didDragDuringPress && hypot(dx, dy) >= dragThreshold {
+            didDragDuringPress = true
+            NSCursor.closedHand.push()
+        }
+        if didDragDuringPress {
+            window.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy))
+        }
+    }
 
-        window.trackEvents(
-            matching: [.leftMouseDragged, .leftMouseUp],
-            timeout: NSEvent.foreverDuration,
-            mode: .eventTracking
-        ) { nextEvent, stop in
-            guard let nextEvent else { return }
+    override func mouseUp(with event: NSEvent) {
+        guard isTrackingPress else { return }
+        isTrackingPress = false
 
-            switch nextEvent.type {
-            case .leftMouseDragged:
-                let currentMouse = NSEvent.mouseLocation
-                let dx = currentMouse.x - startMouse.x
-                let dy = currentMouse.y - startMouse.y
-                if !didDrag && hypot(dx, dy) >= dragThreshold {
-                    didDrag = true
-                    NSCursor.closedHand.push()
-                }
-                if didDrag {
-                    window.setFrameOrigin(NSPoint(x: startOrigin.x + dx, y: startOrigin.y + dy))
-                }
-            case .leftMouseUp:
-                if didDrag {
-                    NSCursor.pop()
-                } else {
-                    let localPoint = self.convert(nextEvent.locationInWindow, from: nil)
-                    completedClick = self.bounds.contains(localPoint)
-                }
-                stop.pointee = true
-            default:
-                break
-            }
+        let startMouse = dragStartScreenPoint
+        dragStartScreenPoint = nil
+        dragStartWindowOrigin = nil
+
+        let finalDist: CGFloat
+        if let startMouse {
+            let currentMouse = NSEvent.mouseLocation
+            finalDist = hypot(currentMouse.x - startMouse.x, currentMouse.y - startMouse.y)
+        } else {
+            finalDist = 0
         }
 
-        if completedClick {
+        if didDragDuringPress || finalDist >= dragThreshold {
+            if didDragDuringPress {
+                NSCursor.pop()
+            }
+            didDragDuringPress = false
+            onDragEnded?()
+            return
+        }
+
+        didDragDuringPress = false
+        let localPoint = convert(event.locationInWindow, from: nil)
+        if bounds.contains(localPoint) {
             onWake?()
         }
     }

@@ -17,6 +17,12 @@ public struct HotKeyCombo: Codable, Equatable, Sendable {
         carbonModifiers: UInt32(optionKey | cmdKey)
     )
 
+    /// Default global hotkey for Preferences: `⌥⌘,`.
+    public static let defaultPreferences = HotKeyCombo(
+        keyCode: UInt32(kVK_ANSI_Comma),
+        carbonModifiers: UInt32(optionKey | cmdKey)
+    )
+
     private static let supportedCarbonModifierMask: UInt32 =
         UInt32(cmdKey | optionKey | controlKey | shiftKey)
 
