@@ -559,7 +559,7 @@ final class FloatingNotepadPanel: NSPanel {
             ghostWakeZoneView.topAnchor.constraint(equalTo: rootContainer.topAnchor),
             ghostWakeZoneView.bottomAnchor.constraint(equalTo: rootContainer.bottomAnchor),
             ghostWakeZoneView.trailingAnchor.constraint(equalTo: rootContainer.trailingAnchor),
-            ghostWakeZoneView.widthAnchor.constraint(equalTo: rootContainer.widthAnchor, multiplier: 0.45)
+            ghostWakeZoneView.widthAnchor.constraint(equalTo: rootContainer.widthAnchor, multiplier: 0.55)
         ])
     }
 
@@ -664,7 +664,7 @@ private final class GhostContentWrapperView: NSView {
     }
 }
 
-/// Right-45% dual-tone click-to-wake zone visible in Ghost Outline Mode; the left 55% remains click-through.
+/// Feathered right-side dual-tone click-to-wake zone in Ghost Outline Mode; fades smoothly from 0 alpha so the left side remains click-through.
 private final class GhostWakeZoneView: NSView {
     var onWake: (() -> Void)?
 
@@ -742,14 +742,16 @@ private final class GhostWakeZoneView: NSView {
         wantsLayer = true
         layer?.masksToBounds = true
 
+        let stops: [NSNumber] = [0.0, 0.16, 0.36, 0.58, 0.80, 1.0]
+
         contrastGradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
         contrastGradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
-        contrastGradientLayer.locations = [0.0, 0.5, 1.0]
+        contrastGradientLayer.locations = stops
         layer?.addSublayer(contrastGradientLayer)
 
         accentGradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
         accentGradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
-        accentGradientLayer.locations = [0.0, 0.5, 1.0]
+        accentGradientLayer.locations = stops
         layer?.addSublayer(accentGradientLayer)
 
         gripPill.translatesAutoresizingMaskIntoConstraints = false
@@ -773,22 +775,26 @@ private final class GhostWakeZoneView: NSView {
 
     private func applyAppearance(animated: Bool) {
         let slateBase = NSColor(srgbRed: 0x14 / 255.0, green: 0x19 / 255.0, blue: 0x24 / 255.0, alpha: 1.0)
-        let contrastAlphas: [CGFloat] = isHovered ? [0.09, 0.15, 0.24] : [0.06, 0.11, 0.18]
+        let contrastAlphas: [CGFloat] = isHovered
+            ? [0.0, 0.018, 0.055, 0.11, 0.17, 0.22]
+            : [0.0, 0.01, 0.035, 0.075, 0.12, 0.16]
         let accentBase = neonGlowEnabled ? accentColor : NSColor.white
-        let accentAlphas: [CGFloat] = isHovered ? [0.05, 0.13, 0.25] : [0.03, 0.09, 0.18]
+        let accentAlphas: [CGFloat] = isHovered
+            ? [0.0, 0.015, 0.045, 0.095, 0.16, 0.22]
+            : [0.0, 0.008, 0.025, 0.06, 0.10, 0.15]
 
         let apply = {
             self.contrastGradientLayer.colors = contrastAlphas.map { slateBase.withAlphaComponent($0).cgColor }
             self.accentGradientLayer.colors = accentAlphas.map { accentBase.withAlphaComponent($0).cgColor }
 
             if self.neonGlowEnabled {
-                self.gripPill.layer?.backgroundColor = self.accentColor.withAlphaComponent(self.isHovered ? 0.98 : 0.85).cgColor
+                self.gripPill.layer?.backgroundColor = self.accentColor.withAlphaComponent(self.isHovered ? 0.96 : 0.76).cgColor
                 self.gripPill.layer?.shadowColor = self.accentColor.cgColor
-                self.gripPill.layer?.shadowOpacity = self.isHovered ? 0.65 : 0.45
+                self.gripPill.layer?.shadowOpacity = self.isHovered ? 0.6 : 0.38
             } else {
-                self.gripPill.layer?.backgroundColor = NSColor.white.withAlphaComponent(self.isHovered ? 0.92 : 0.78).cgColor
+                self.gripPill.layer?.backgroundColor = NSColor.white.withAlphaComponent(self.isHovered ? 0.90 : 0.70).cgColor
                 self.gripPill.layer?.shadowColor = NSColor.black.cgColor
-                self.gripPill.layer?.shadowOpacity = 0.3
+                self.gripPill.layer?.shadowOpacity = 0.28
             }
         }
 

@@ -45,15 +45,35 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
-ICON_PLIST_ENTRY=""
+ICON_SRC="$ROOT_DIR/Assets/AppIcon.png"
+if [[ ! -f "$ICON_SRC" ]]; then
+    echo "Error: expected app icon asset at $ICON_SRC" >&2
+    exit 1
+fi
+
 ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/notecast-icon.XXXXXX")"
 ICON_GEN_SRC="$ICON_TMP/gen_icon.swift"
 ICON_GEN_BIN="$ICON_TMP/gen_icon"
 
 cat > "$ICON_GEN_SRC" << 'SWIFT'
 import AppKit
+import ImageIO
 
-let outFile = URL(fileURLWithPath: CommandLine.arguments[1])
+guard CommandLine.arguments.count >= 3 else {
+    fputs("Usage: gen_icon <source.png> <output.icns>\n", stderr)
+    exit(1)
+}
+
+let inFile = URL(fileURLWithPath: CommandLine.arguments[1])
+let outFile = URL(fileURLWithPath: CommandLine.arguments[2])
+
+guard let imageSource = CGImageSourceCreateWithURL(inFile as CFURL, nil),
+      let sourceCGImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+    fputs("Error: failed to load source PNG at \(inFile.path)\n", stderr)
+    exit(1)
+}
+
+let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 let entries: [(String, Int)] = [
     ("icp4", 16),
     ("ic11", 32),
@@ -70,67 +90,33 @@ let entries: [(String, Int)] = [
 var body = Data()
 
 for (chunkType, px) in entries {
-    let rep = NSBitmapImageRep(
-        bitmapDataPlanes: nil,
-        pixelsWide: px,
-        pixelsHigh: px,
-        bitsPerSample: 8,
-        samplesPerPixel: 4,
-        hasAlpha: true,
-        isPlanar: false,
-        colorSpaceName: .deviceRGB,
+    guard let ctx = CGContext(
+        data: nil,
+        width: px,
+        height: px,
+        bitsPerComponent: 8,
         bytesPerRow: 0,
-        bitsPerPixel: 0
-    )!
-    rep.size = NSSize(width: px, height: px)
-
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-
-    let size = CGFloat(px)
-    let inset = size * 0.08
-    let rect = NSRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
-    let radius = size * 0.22
-    let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-
-    let gradient = NSGradient(
-        starting: NSColor(calibratedRed: 0.14, green: 0.16, blue: 0.21, alpha: 1.0),
-        ending: NSColor(calibratedRed: 0.08, green: 0.09, blue: 0.12, alpha: 1.0)
-    )!
-    gradient.draw(in: path, angle: -90)
-
-    NSColor(calibratedWhite: 1.0, alpha: 0.16).setStroke()
-    path.lineWidth = max(1, size * 0.012)
-    path.stroke()
-
-    let symbolConfig = NSImage.SymbolConfiguration(pointSize: size * 0.44, weight: .medium)
-    if let symbol = NSImage(systemSymbolName: "note.text", accessibilityDescription: nil)?
-        .withSymbolConfiguration(symbolConfig)
-    {
-        let tinted = NSImage(size: symbol.size, flipped: false) { bounds in
-            symbol.draw(in: bounds)
-            NSColor(calibratedRed: 0.96, green: 0.97, blue: 1.0, alpha: 0.95).set()
-            bounds.fill(using: .sourceAtop)
-            return true
-        }
-        let imgSize = tinted.size
-        let dest = NSRect(
-            x: (size - imgSize.width) * 0.5,
-            y: (size - imgSize.height) * 0.5,
-            width: imgSize.width,
-            height: imgSize.height
-        )
-        tinted.draw(in: dest)
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        fputs("Error: failed to allocate \(px)x\(px) CGContext\n", stderr)
+        exit(1)
     }
 
-    NSGraphicsContext.restoreGraphicsState()
+    ctx.interpolationQuality = .high
+    ctx.clear(CGRect(x: 0, y: 0, width: px, height: px))
+    ctx.draw(sourceCGImage, in: CGRect(x: 0, y: 0, width: px, height: px))
 
-    if let pngData = rep.representation(using: .png, properties: [:]) {
-        let chunkLength = UInt32(8 + pngData.count).bigEndian
-        body.append(contentsOf: chunkType.utf8)
-        withUnsafeBytes(of: chunkLength) { body.append(contentsOf: $0) }
-        body.append(pngData)
+    guard let scaledImage = ctx.makeImage(),
+          let pngData = NSBitmapImageRep(cgImage: scaledImage).representation(using: .png, properties: [:]) else {
+        fputs("Error: failed to encode \(px)x\(px) PNG chunk\n", stderr)
+        exit(1)
     }
+
+    let chunkLength = UInt32(8 + pngData.count).bigEndian
+    body.append(contentsOf: chunkType.utf8)
+    withUnsafeBytes(of: chunkLength) { body.append(contentsOf: $0) }
+    body.append(pngData)
 }
 
 var icns = Data()
@@ -142,10 +128,16 @@ icns.append(body)
 try icns.write(to: outFile, options: [.atomic])
 SWIFT
 
-if swiftc "$ICON_GEN_SRC" -o "$ICON_GEN_BIN" -framework AppKit 2>/dev/null; then
-    if "$ICON_GEN_BIN" "$RESOURCES_DIR/AppIcon.icns"; then
-        ICON_PLIST_ENTRY=$'    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>'
-    fi
+if ! swiftc "$ICON_GEN_SRC" -o "$ICON_GEN_BIN" -framework AppKit -framework ImageIO; then
+    rm -rf "$ICON_TMP"
+    echo "Error: failed to compile icon generator" >&2
+    exit 1
+fi
+
+if ! "$ICON_GEN_BIN" "$ICON_SRC" "$RESOURCES_DIR/AppIcon.icns"; then
+    rm -rf "$ICON_TMP"
+    echo "Error: failed to generate AppIcon.icns from $ICON_SRC" >&2
+    exit 1
 fi
 rm -rf "$ICON_TMP"
 
@@ -174,7 +166,8 @@ cat > "$CONTENTS_DIR/Info.plist" << PLIST
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
-$ICON_PLIST_ENTRY
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 PLIST
