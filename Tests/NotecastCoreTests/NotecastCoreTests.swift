@@ -276,6 +276,124 @@ struct MarkdownEditingTests {
         #expect(outsideEdit != nil)
         #expect(apply(outsideEdit!, to: afterFence) == afterFence + "\n- ")
     }
+
+    @Test("Enter at column 0 or inside checkbox prefix pushes row down without splitting - [x]")
+    func enterBeforeCheckboxNeverSplitsPrefix() {
+        let task = "- [x] Ship release"
+        // Column 0
+        let atStart = MarkdownEditing.handleNewline(in: task, selection: NSRange(location: 0, length: 0))
+        #expect(atStart != nil)
+        #expect(apply(atStart!, to: task) == "\n- [x] Ship release")
+        #expect(atStart?.newSelection == NSRange(location: 0, length: 0))
+
+        // Inside prefix (between `-` and `[x]`)
+        let midPrefix = MarkdownEditing.handleNewline(in: task, selection: NSRange(location: 2, length: 0))
+        #expect(midPrefix != nil)
+        #expect(apply(midPrefix!, to: task) == "\n- [x] Ship release")
+    }
+
+    @Test("Backspace atomically removes checklist prefix and horizontal rule lines")
+    func atomicBackspaceOnCheckboxAndDivider() {
+        let task = "- [x] Ship release"
+        // Right after `- [x] ` (index 6)
+        let delPrefix = MarkdownEditing.handleDeleteBackward(in: task, selection: NSRange(location: 6, length: 0))
+        #expect(delPrefix != nil)
+        #expect(apply(delPrefix!, to: task) == "Ship release")
+        #expect(delPrefix?.newSelection == NSRange(location: 0, length: 0))
+
+        // Inside `- [x]` (index 4)
+        let delInside = MarkdownEditing.handleDeleteBackward(in: task, selection: NSRange(location: 4, length: 0))
+        #expect(delInside != nil)
+        #expect(apply(delInside!, to: task) == "Ship release")
+
+        // Horizontal rule line `---`
+        let divider = "Above\n---\nBelow"
+        let delDivider = MarkdownEditing.handleDeleteBackward(in: divider, selection: NSRange(location: 9, length: 0))
+        #expect(delDivider != nil)
+        #expect(apply(delDivider!, to: divider) == "Above\n\nBelow")
+    }
+
+    @Test("Double hyphen + space expands into horizontal rule divider outside code fences")
+    func doubleHyphenSpaceHorizontalRule() {
+        let text = "Intro\n--"
+        let edit = MarkdownEditing.handleSpace(in: text, selection: NSRange(location: (text as NSString).length, length: 0))
+        #expect(edit != nil)
+        #expect(apply(edit!, to: text) == "Intro\n---\n")
+
+        // Must NOT trigger inside a fenced code block or mid-line
+        let fenced = "```sql\n--"
+        #expect(MarkdownEditing.handleSpace(in: fenced, selection: NSRange(location: (fenced as NSString).length, length: 0)) == nil)
+        let midLine = "foo --"
+        #expect(MarkdownEditing.handleSpace(in: midLine, selection: NSRange(location: (midLine as NSString).length, length: 0)) == nil)
+    }
+
+    @Test("Roman numeral lists continue, exit, protect col-0 Enter, and delete atomically on Backspace")
+    func romanNumeralListsBehavior() {
+        #expect(MarkdownEditing.parseCanonicalRoman("i")?.value == 1)
+        #expect(MarkdownEditing.parseCanonicalRoman("iv")?.value == 4)
+        #expect(MarkdownEditing.parseCanonicalRoman("IX")?.value == 9)
+        #expect(MarkdownEditing.parseCanonicalRoman("IX")?.uppercase == true)
+        #expect(MarkdownEditing.parseCanonicalRoman("iiii") == nil)
+        #expect(MarkdownEditing.parseCanonicalRoman("Iv") == nil)
+
+        let r1 = "i. first"
+        let e1 = MarkdownEditing.handleNewline(in: r1, selection: NSRange(location: (r1 as NSString).length, length: 0))
+        #expect(e1 != nil)
+        #expect(apply(e1!, to: r1) == "i. first\nii. ")
+
+        let r3 = "iii. third"
+        let e3 = MarkdownEditing.handleNewline(in: r3, selection: NSRange(location: (r3 as NSString).length, length: 0))
+        #expect(apply(e3!, to: r3) == "iii. third\niv. ")
+
+        let rUpper = "III. Section"
+        let eUpper = MarkdownEditing.handleNewline(in: rUpper, selection: NSRange(location: (rUpper as NSString).length, length: 0))
+        #expect(apply(eUpper!, to: rUpper) == "III. Section\nIV. ")
+
+        // Empty Roman item exits cleanly
+        let emptyRoman = "ii. "
+        let exitRoman = MarkdownEditing.handleNewline(in: emptyRoman, selection: NSRange(location: 4, length: 0))
+        #expect(apply(exitRoman!, to: emptyRoman) == "")
+
+        // Col-0 Enter pushes intact Roman item down
+        let col0 = MarkdownEditing.handleNewline(in: r3, selection: NSRange(location: 0, length: 0))
+        #expect(apply(col0!, to: r3) == "\niii. third")
+
+        // Backspace after `iv. `, `- `, `1. ` removes the entire prefix atomically
+        let romanDel = MarkdownEditing.handleDeleteBackward(in: "iv. fourth", selection: NSRange(location: 4, length: 0))
+        #expect(apply(romanDel!, to: "iv. fourth") == "fourth")
+        let bulletDel = MarkdownEditing.handleDeleteBackward(in: "- item", selection: NSRange(location: 2, length: 0))
+        #expect(apply(bulletDel!, to: "- item") == "item")
+        let numDel = MarkdownEditing.handleDeleteBackward(in: "12. dozen", selection: NSRange(location: 4, length: 0))
+        #expect(apply(numDel!, to: "12. dozen") == "dozen")
+    }
+
+    @Test("toggleBulletList (⌘⇧8) and toggleNumberedList (⌘⇧9) toggle and convert single and multi-line blocks")
+    func toggleBulletAndNumberedLists() {
+        let plain = "alpha\nbeta"
+        let toBullets = MarkdownEditing.toggleBulletList(in: plain, selection: NSRange(location: 0, length: (plain as NSString).length))
+        let bulleted = apply(toBullets, to: plain)
+        #expect(bulleted == "- alpha\n- beta")
+
+        let backToPlain = MarkdownEditing.toggleBulletList(in: bulleted, selection: toBullets.newSelection)
+        #expect(apply(backToPlain, to: bulleted) == plain)
+
+        let toNumbers = MarkdownEditing.toggleNumberedList(in: bulleted, selection: NSRange(location: 0, length: (bulleted as NSString).length))
+        let numbered = apply(toNumbers, to: bulleted)
+        #expect(numbered == "1. alpha\n2. beta")
+
+        let clearNumbers = MarkdownEditing.toggleNumberedList(in: numbered, selection: toNumbers.newSelection)
+        #expect(apply(clearNumbers, to: numbered) == plain)
+
+        // Single-line numbered toggle continues from previous numbered line
+        let continued = "1. one\ntwo"
+        let addNum = MarkdownEditing.toggleNumberedList(in: continued, selection: NSRange(location: 10, length: 0))
+        #expect(apply(addNum, to: continued) == "1. one\n2. two")
+
+        // List toggle skips fenced code blocks without corrupting delimiters or code lines
+        let withFence = "before\n```swift\nlet x = 1\n```\nafter"
+        let toggled = MarkdownEditing.toggleBulletList(in: withFence, selection: NSRange(location: 0, length: (withFence as NSString).length))
+        #expect(apply(toggled, to: withFence) == "- before\n```swift\nlet x = 1\n```\n- after")
+    }
 }
 
 @Suite("MarkdownStyler")
@@ -427,12 +545,12 @@ struct MarkdownStylerTests {
         let outsideHeadingIdx = nsText.range(of: "Real Heading").location
 
         let insideFont = storage.attribute(.font, at: insideHashIdx, effectiveRange: nil) as? NSFont
-        let insideCodeAttr = storage.attribute(MarkdownStyler.codeBlockAttribute, at: insideHashIdx, effectiveRange: nil) as? Bool
+        let insideCodeAttr = storage.attribute(MarkdownStyler.codeBlockAttribute, at: insideHashIdx, effectiveRange: nil) as? Int
         let insideBoldFont = storage.attribute(.font, at: insideBoldIdx, effectiveRange: nil) as? NSFont
         let outsideFont = storage.attribute(.font, at: outsideHeadingIdx, effectiveRange: nil) as? NSFont
-        let outsideCodeAttr = storage.attribute(MarkdownStyler.codeBlockAttribute, at: outsideHeadingIdx, effectiveRange: nil) as? Bool
+        let outsideCodeAttr = storage.attribute(MarkdownStyler.codeBlockAttribute, at: outsideHeadingIdx, effectiveRange: nil) as? Int
 
-        #expect(insideCodeAttr == true)
+        #expect(insideCodeAttr == 1)
         #expect(insideFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
         #expect(insideBoldFont?.fontDescriptor.symbolicTraits.contains(.bold) == false)
         #expect((outsideFont?.pointSize ?? 0) > 14)
@@ -448,6 +566,54 @@ struct MarkdownStylerTests {
         let promotedHeadingIdx = updatedText.range(of: "Not a heading").location
         let promotedFont = storage.attribute(.font, at: promotedHeadingIdx, effectiveRange: nil) as? NSFont
         #expect((promotedFont?.pointSize ?? 0) > 14)
+    }
+
+    @Test("Adjacent triple-backtick fences restyle cleanly on edit and get distinct code-block IDs")
+    func adjacentFencesAndDistinctBlockIDs() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+
+        // Two adjacent fenced blocks must receive distinct block IDs (1 and 2)
+        let twoBlocks = "```\nfirst\n```\n```\nsecond\n```"
+        let twoStorage = NSTextStorage(string: twoBlocks)
+        styler.styleAll(twoStorage)
+        let nsTwo = twoBlocks as NSString
+        let id1 = twoStorage.attribute(MarkdownStyler.codeBlockAttribute, at: nsTwo.range(of: "first").location, effectiveRange: nil) as? Int
+        let id2 = twoStorage.attribute(MarkdownStyler.codeBlockAttribute, at: nsTwo.range(of: "second").location, effectiveRange: nil) as? Int
+        #expect(id1 == 1)
+        #expect(id2 == 2)
+
+        // Two consecutive ``` lines followed by `# heading`: deleting one backtick from line 1 opens fence 2
+        let adjacent = "```\n```\n# Heading"
+        let storage = NSTextStorage(string: adjacent)
+        styler.styleAll(storage)
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: 2, length: 1), with: "")
+        styler.style(storage, in: NSRange(location: 2, length: 0))
+        storage.endEditing()
+
+        let updated = storage.string as NSString
+        let headingIdx = updated.range(of: "Heading").location
+        let codeID = storage.attribute(MarkdownStyler.codeBlockAttribute, at: headingIdx, effectiveRange: nil) as? Int
+        let font = storage.attribute(.font, at: headingIdx, effectiveRange: nil) as? NSFont
+        #expect(codeID != nil)
+        #expect(font?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
+    }
+
+    @Test("URLs with balanced parentheses and short local URLs receive full link destinations")
+    func balancedParenAndShortURLs() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let text = "See https://example.org/page_(topic) and [Wiki](https://example.org/page_(topic)) and http://x"
+        let storage = NSTextStorage(string: text)
+        styler.styleAll(storage)
+
+        let nsText = text as NSString
+        let bareIdx = nsText.range(of: "https://example.org/page_(topic)").location
+        let mdIdx = nsText.range(of: "Wiki").location
+        let shortIdx = nsText.range(of: "http://x").location
+
+        #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: bareIdx, effectiveRange: nil) as? URL)?.absoluteString == "https://example.org/page_(topic)")
+        #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: mdIdx, effectiveRange: nil) as? URL)?.absoluteString == "https://example.org/page_(topic)")
+        #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: shortIdx, effectiveRange: nil) as? URL)?.absoluteString == "http://x")
     }
 
     @Test("Blockquotes, checkboxes, and Cmd-click links attach custom rendering attributes")
@@ -472,6 +638,45 @@ struct MarkdownStylerTests {
         #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: mdLinkIdx, effectiveRange: nil) as? URL)?.absoluteString == "https://notecast.app")
         #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: bareLinkIdx, effectiveRange: nil) as? URL)?.absoluteString == "https://example.org/docs")
         #expect(storage.attribute(MarkdownStyler.linkURLAttribute, at: codeLinkIdx, effectiveRange: nil) == nil)
+    }
+
+    @Test("Horizontal rules attach divider attribute and checked/unchecked slots use identical fixed-width font")
+    func horizontalRuleAndFixedWidthCheckboxSlot() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let text = "- [ ] Open\n- [x] Done\n---\nNext"
+        let storage = NSTextStorage(string: text)
+        styler.styleAll(storage)
+
+        let nsText = text as NSString
+        let uncheckedFont = storage.attribute(.font, at: nsText.range(of: "- [ ]").location, effectiveRange: nil) as? NSFont
+        let checkedFont = storage.attribute(.font, at: nsText.range(of: "- [x]").location, effectiveRange: nil) as? NSFont
+        #expect(uncheckedFont != nil)
+        #expect(uncheckedFont == checkedFont)
+        #expect(uncheckedFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
+
+        let hrIdx = nsText.range(of: "---").location
+        #expect(storage.attribute(MarkdownStyler.horizontalRuleAttribute, at: hrIdx, effectiveRange: nil) as? Bool == true)
+    }
+
+    @Test("Bullet, numbered, and Roman numeral lists attach expected marker attributes")
+    func bulletNumberedAndRomanListStyling() {
+        let styler = MarkdownStyler(baseFontSize: 14, accentColor: UIAccent.violet.nsColor)
+        let text = "- Top bullet\n  - Nested bullet\n1. First\niv. Fourth"
+        let storage = NSTextStorage(string: text)
+        styler.styleAll(storage)
+
+        let nsText = text as NSString
+        let topDashIdx = nsText.range(of: "- Top").location
+        let nestedDashIdx = nsText.range(of: "- Nested").location
+        #expect(storage.attribute(MarkdownStyler.bulletMarkerAttribute, at: topDashIdx, effectiveRange: nil) as? Int == 0)
+        #expect(storage.attribute(MarkdownStyler.bulletMarkerAttribute, at: nestedDashIdx, effectiveRange: nil) as? Int == 1)
+
+        let numIdx = nsText.range(of: "1.").location
+        let romanIdx = nsText.range(of: "iv.").location
+        let numColor = storage.attribute(.foregroundColor, at: numIdx, effectiveRange: nil) as? NSColor
+        let romanColor = storage.attribute(.foregroundColor, at: romanIdx, effectiveRange: nil) as? NSColor
+        #expect(numColor != nil)
+        #expect(romanColor != nil)
     }
 }
 
@@ -889,6 +1094,35 @@ struct NoteLibraryStoreTests {
         #expect(NoteLibraryStore.extractTitle(from: doc) == "Quick Title")
         #expect(NoteLibraryStore.extractTitle(from: "   \n\n") == "Untitled Note")
     }
+
+    @Test("Failed deleteNote rolls back the staged file and in-memory index intact")
+    func failedDeleteRollsBack() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let indexURL = notesDir.appendingPathComponent("index.json")
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+
+        let note1 = try store.createNote(initialContent: "# Keep Me\nOriginal body")
+        let note2 = try store.createNote(initialContent: "# Delete Target\nMust rollback on failure")
+        let targetURL = notesDir.appendingPathComponent("\(note2.id.uuidString).md")
+
+        // Block index.json so deleteNote fails on manifest write
+        try FileManager.default.removeItem(at: indexURL)
+        try FileManager.default.createDirectory(at: indexURL, withIntermediateDirectories: true)
+        try Data("lock".utf8).write(to: indexURL.appendingPathComponent("lock"))
+
+        #expect(throws: (any Error).self) {
+            _ = try store.deleteNote(id: note2.id)
+        }
+
+        // File and index entry MUST both be rolled back intact
+        #expect(FileManager.default.fileExists(atPath: targetURL.path))
+        #expect(try String(contentsOf: targetURL, encoding: .utf8) == "# Delete Target\nMust rollback on failure")
+        #expect(store.allNotes().map(\.id).contains(note2.id))
+        #expect(store.allNotes().map(\.id).contains(note1.id))
+    }
 }
 
 @Suite("CommandPaletteSearch")
@@ -979,6 +1213,8 @@ struct AppSettingsAndStylerTests {
         #expect(settings.surfaceStyle == .charcoal)
         #expect(settings.neonGlowEnabled == true)
         #expect(settings.neonAccent == .cyan)
+        #expect(settings.uiAccent == .cyan)
+        #expect(settings.checkboxStyle == .circle)
         #expect(settings.fontFamily == "system")
         #expect(settings.ghostOnUnfocus == false)
         #expect(settings.ghostWakeZoneFraction == AppSettings.defaultGhostWakeZoneFraction)
@@ -987,6 +1223,8 @@ struct AppSettingsAndStylerTests {
         settings.surfaceStyle = .midnightSlate
         settings.neonGlowEnabled = false
         settings.neonAccent = .magenta
+        settings.uiAccent = .violet
+        settings.checkboxStyle = .square
         settings.fontFamily = "system-serif"
         settings.ghostOnUnfocus = true
         settings.ghostWakeZoneFraction = 0.30
@@ -996,6 +1234,8 @@ struct AppSettingsAndStylerTests {
         #expect(reloaded.surfaceStyle == .midnightSlate)
         #expect(reloaded.neonGlowEnabled == false)
         #expect(reloaded.neonAccent == .magenta)
+        #expect(reloaded.uiAccent == .violet)
+        #expect(reloaded.checkboxStyle == .square)
         #expect(reloaded.fontFamily == "system-serif")
         #expect(reloaded.ghostOnUnfocus == true)
         #expect(reloaded.hasSeenOnboardingGuide == true)

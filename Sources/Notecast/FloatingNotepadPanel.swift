@@ -59,6 +59,8 @@ final class FloatingNotepadPanel: NSPanel {
     private var panelOpacity: Double
     private var neonGlowEnabled: Bool
     private var neonAccent: NeonAccent
+    private var uiAccent: UIAccent
+    private var checkboxStyle: CheckboxStyle
     private var isAlwaysOnTop: Bool
     private var ghostOnUnfocus: Bool
     private var ghostWakeZoneFraction: Double
@@ -76,6 +78,8 @@ final class FloatingNotepadPanel: NSPanel {
         opacity: Double,
         neonGlowEnabled: Bool,
         neonAccent: NeonAccent,
+        uiAccent: UIAccent,
+        checkboxStyle: CheckboxStyle,
         ghostOnUnfocus: Bool,
         ghostWakeZoneFraction: Double,
         hotKeyHint: String
@@ -84,6 +88,8 @@ final class FloatingNotepadPanel: NSPanel {
         self.panelOpacity = opacity
         self.neonGlowEnabled = neonGlowEnabled
         self.neonAccent = neonAccent
+        self.uiAccent = uiAccent
+        self.checkboxStyle = checkboxStyle
         self.isAlwaysOnTop = alwaysOnTop
         self.ghostOnUnfocus = ghostOnUnfocus
         self.ghostWakeZoneFraction = AppSettings.clampGhostWakeZoneFraction(ghostWakeZoneFraction)
@@ -102,8 +108,11 @@ final class FloatingNotepadPanel: NSPanel {
         )
         textContainer.widthTracksTextView = true
 
+        let resolvedAccent = uiAccent.effectiveColor(forLightSurface: surfaceStyle.isLight)
+
         let layoutManager = MarkdownLayoutManager()
-        layoutManager.accentColor = neonGlowEnabled ? neonAccent.nsColor : .controlAccentColor
+        layoutManager.accentColor = resolvedAccent
+        layoutManager.checkboxStyle = checkboxStyle
         layoutManager.addTextContainer(textContainer)
 
         let textStorage = NSTextStorage()
@@ -114,7 +123,7 @@ final class FloatingNotepadPanel: NSPanel {
             textContainer: textContainer,
             fontSize: fontSize,
             fontFamily: fontFamily,
-            accentColor: neonGlowEnabled ? neonAccent.nsColor : .controlAccentColor
+            accentColor: resolvedAccent
         )
         editor.minSize = .zero
         editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -297,6 +306,9 @@ final class FloatingNotepadPanel: NSPanel {
         }
 
         headerView.layer?.backgroundColor = (style.headerBackgroundColor ?? .clear).cgColor
+        if styleChanged {
+            textView.applyAccentColor(resolvedUIAccentColor)
+        }
         refreshActiveNeonVisuals(animated: false)
 
         if !notesListView.isHidden {
@@ -316,7 +328,6 @@ final class FloatingNotepadPanel: NSPanel {
         self.neonGlowEnabled = enabled
         self.neonAccent = accent
 
-        textView.applyAccentColor(enabled ? accent.nsColor : .controlAccentColor)
         updatePinTint()
         refreshActiveNeonVisuals(animated: true)
 
@@ -327,6 +338,21 @@ final class FloatingNotepadPanel: NSPanel {
                 neonAccent: accent
             )
         }
+    }
+
+    private var resolvedUIAccentColor: NSColor {
+        uiAccent.effectiveColor(forLightSurface: surfaceStyle.isLight)
+    }
+
+    func applyUIAccent(_ accent: UIAccent) {
+        self.uiAccent = accent
+        textView.applyAccentColor(resolvedUIAccentColor)
+        refreshHeaderButtonsTheme()
+    }
+
+    func applyCheckboxStyle(_ style: CheckboxStyle) {
+        self.checkboxStyle = style
+        textView.applyCheckboxStyle(style)
     }
 
     func applyFont(family: String, size: CGFloat) {
@@ -726,7 +752,7 @@ final class FloatingNotepadPanel: NSPanel {
     }
 
     private func refreshHeaderButtonsTheme() {
-        let accent: NSColor = neonGlowEnabled ? neonAccent.nsColor : .controlAccentColor
+        let accent: NSColor = resolvedUIAccentColor
         for button in headerButtons {
             if button !== helpButton {
                 button.activeAccentColor = accent

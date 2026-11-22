@@ -190,6 +190,76 @@ public enum NeonAccent: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Accent color used across editor UI elements (checkboxes, blockquote bars, links, active buttons, and caret),
+/// independent of whether active Neon Glow is enabled.
+public enum UIAccent: String, Codable, CaseIterable, Sendable {
+    case cyan
+    case violet
+    case magenta
+    case emerald
+    case amber
+    case coral
+    case sky
+    case system
+
+    public var displayName: String {
+        switch self {
+        case .cyan: return "Cyan"
+        case .violet: return "Violet"
+        case .magenta: return "Magenta"
+        case .emerald: return "Emerald"
+        case .amber: return "Amber"
+        case .coral: return "Coral"
+        case .sky: return "Sky Blue"
+        case .system: return "macOS System"
+        }
+    }
+
+    public var nsColor: NSColor {
+        effectiveColor(forLightSurface: false)
+    }
+
+    /// Returns a contrast-appropriate accent color for dark or light surfaces (darkens bright accents on paper/mist).
+    public func effectiveColor(forLightSurface: Bool) -> NSColor {
+        guard forLightSurface else {
+            switch self {
+            case .cyan: return NSColor(srgbRed: 0.0, green: 0.88, blue: 0.96, alpha: 1.0)
+            case .violet: return NSColor(srgbRed: 0.722, green: 0.302, blue: 1.0, alpha: 1.0)
+            case .magenta: return NSColor(srgbRed: 1.0, green: 0.22, blue: 0.60, alpha: 1.0)
+            case .emerald: return NSColor(srgbRed: 0.10, green: 0.88, blue: 0.56, alpha: 1.0)
+            case .amber: return NSColor(srgbRed: 1.0, green: 0.722, blue: 0.0, alpha: 1.0)
+            case .coral: return NSColor(srgbRed: 1.0, green: 0.42, blue: 0.36, alpha: 1.0)
+            case .sky: return NSColor(srgbRed: 0.24, green: 0.66, blue: 1.0, alpha: 1.0)
+            case .system: return .controlAccentColor
+            }
+        }
+
+        switch self {
+        case .cyan: return NSColor(srgbRed: 0.0, green: 0.48, blue: 0.58, alpha: 1.0)
+        case .violet: return NSColor(srgbRed: 0.48, green: 0.18, blue: 0.78, alpha: 1.0)
+        case .magenta: return NSColor(srgbRed: 0.76, green: 0.10, blue: 0.42, alpha: 1.0)
+        case .emerald: return NSColor(srgbRed: 0.0, green: 0.52, blue: 0.34, alpha: 1.0)
+        case .amber: return NSColor(srgbRed: 0.70, green: 0.42, blue: 0.0, alpha: 1.0)
+        case .coral: return NSColor(srgbRed: 0.78, green: 0.24, blue: 0.20, alpha: 1.0)
+        case .sky: return NSColor(srgbRed: 0.08, green: 0.42, blue: 0.76, alpha: 1.0)
+        case .system: return .controlAccentColor
+        }
+    }
+}
+
+/// Visual shape for rendered Markdown checkboxes.
+public enum CheckboxStyle: String, Codable, CaseIterable, Sendable {
+    case circle
+    case square
+
+    public var displayName: String {
+        switch self {
+        case .circle: return "Circle"
+        case .square: return "Rounded Square"
+        }
+    }
+}
+
 /// Persists user preferences and the last floating panel frame in `UserDefaults`.
 @MainActor
 public final class AppSettings {
@@ -203,6 +273,8 @@ public final class AppSettings {
         static let surfaceStyle = "notecast.surfaceStyle"
         static let neonGlowEnabled = "notecast.neonGlowEnabled"
         static let neonAccent = "notecast.neonAccent"
+        static let uiAccent = "notecast.uiAccent"
+        static let checkboxStyle = "notecast.checkboxStyle"
         static let fontFamily = "notecast.fontFamily"
         static let ghostOnUnfocus = "notecast.ghostOnUnfocus"
         static let ghostWakeZoneFraction = "notecast.ghostWakeZoneFraction"
@@ -352,6 +424,34 @@ public final class AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.neonAccent)
+        }
+    }
+
+    public var uiAccent: UIAccent {
+        get {
+            guard let raw = defaults.string(forKey: Keys.uiAccent),
+                  let accent = UIAccent(rawValue: raw)
+            else {
+                return .cyan
+            }
+            return accent
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.uiAccent)
+        }
+    }
+
+    public var checkboxStyle: CheckboxStyle {
+        get {
+            guard let raw = defaults.string(forKey: Keys.checkboxStyle),
+                  let style = CheckboxStyle(rawValue: raw)
+            else {
+                return .circle
+            }
+            return style
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.checkboxStyle)
         }
     }
 

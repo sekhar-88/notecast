@@ -11,6 +11,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     var onOpacityChanged: ((Double) -> Void)?
     var onNeonGlowChanged: ((Bool) -> Void)?
     var onNeonAccentChanged: ((NeonAccent) -> Void)?
+    var onUIAccentChanged: ((UIAccent) -> Void)?
+    var onCheckboxStyleChanged: ((CheckboxStyle) -> Void)?
     var onFontFamilyChanged: ((String) -> Void)?
     var onFontFamilyPreview: ((String) -> Void)?
     var onFontSizeChanged: ((CGFloat) -> Void)?
@@ -31,6 +33,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
     private let opacityValueLabel = NSTextField(labelWithString: "96%")
     private let neonGlowCheckbox = NSButton(checkboxWithTitle: "Neon glow when active", target: nil, action: nil)
     private let neonAccentPopup = NSPopUpButton()
+    private let uiAccentPopup = NSPopUpButton()
+    private let checkboxStylePopup = NSPopUpButton()
     private let fontFamilyPopup = NSPopUpButton()
     private let fontSizeStepper = NSStepper()
     private let fontSizeValueLabel = NSTextField(labelWithString: "14 pt")
@@ -57,7 +61,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         self.hotKeyRecorder = HotKeyRecorderControl(combo: settings.hotKey)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 490, height: 580),
+            contentRect: NSRect(x: 0, y: 0, width: 490, height: 616),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -124,6 +128,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         neonAccentPopup.isEnabled = settings.neonGlowEnabled
         if let accentIndex = NeonAccent.allCases.firstIndex(of: settings.neonAccent) {
             neonAccentPopup.selectItem(at: accentIndex)
+        }
+        if let uiAccentIndex = UIAccent.allCases.firstIndex(of: settings.uiAccent) {
+            uiAccentPopup.selectItem(at: uiAccentIndex)
+        }
+        if let checkboxIndex = CheckboxStyle.allCases.firstIndex(of: settings.checkboxStyle) {
+            checkboxStylePopup.selectItem(at: checkboxIndex)
         }
 
         selectFontFamilyItem(settings.fontFamily)
@@ -205,6 +215,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         neonRow.orientation = .horizontal
         neonRow.spacing = 10
         grid.addRow(with: [makeTitleLabel("Neon Glow:"), neonRow])
+
+        // 4b. UI Accent & Checkbox Style (independent of Neon Glow)
+        uiAccentPopup.removeAllItems()
+        for accent in UIAccent.allCases {
+            uiAccentPopup.addItem(withTitle: accent.displayName)
+            uiAccentPopup.lastItem?.image = makeColorDotImage(color: accent.nsColor)
+        }
+        checkboxStylePopup.removeAllItems()
+        for style in CheckboxStyle.allCases {
+            checkboxStylePopup.addItem(withTitle: style.displayName)
+        }
+        let uiAccentRow = NSStackView(views: [uiAccentPopup, checkboxStylePopup])
+        uiAccentRow.orientation = .horizontal
+        uiAccentRow.spacing = 10
+        grid.addRow(with: [makeTitleLabel("UI Accent:"), uiAccentRow])
 
         // 5. Font Family
         populateFontPopup()
@@ -349,6 +374,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         neonAccentPopup.target = self
         neonAccentPopup.action = #selector(handleNeonAccentChanged)
 
+        uiAccentPopup.target = self
+        uiAccentPopup.action = #selector(handleUIAccentChanged)
+
+        checkboxStylePopup.target = self
+        checkboxStylePopup.action = #selector(handleCheckboxStyleChanged)
+
         fontFamilyPopup.target = self
         fontFamilyPopup.action = #selector(handleFontFamilyChanged)
         fontFamilyPopup.menu?.delegate = self
@@ -407,6 +438,32 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSMe
         let index = neonAccentPopup.indexOfSelectedItem
         guard index >= 0, index < NeonAccent.allCases.count else { return }
         onNeonAccentChanged?(NeonAccent.allCases[index])
+    }
+
+    @objc private func handleUIAccentChanged() {
+        let index = uiAccentPopup.indexOfSelectedItem
+        guard index >= 0, index < UIAccent.allCases.count else { return }
+        onUIAccentChanged?(UIAccent.allCases[index])
+    }
+
+    @objc private func handleCheckboxStyleChanged() {
+        let index = checkboxStylePopup.indexOfSelectedItem
+        guard index >= 0, index < CheckboxStyle.allCases.count else { return }
+        onCheckboxStyleChanged?(CheckboxStyle.allCases[index])
+    }
+
+    private func makeColorDotImage(color: NSColor) -> NSImage {
+        let size = NSSize(width: 10, height: 10)
+        return NSImage(size: size, flipped: false) { rect in
+            let inset = rect.insetBy(dx: 1, dy: 1)
+            let path = NSBezierPath(ovalIn: inset)
+            color.setFill()
+            path.fill()
+            NSColor.labelColor.withAlphaComponent(0.18).setStroke()
+            path.lineWidth = 0.75
+            path.stroke()
+            return true
+        }
     }
 
     @objc private func handleFontFamilyChanged() {

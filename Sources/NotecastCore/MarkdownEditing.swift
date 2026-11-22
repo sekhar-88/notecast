@@ -15,23 +15,126 @@ public enum MarkdownEditing {
     }
 
     private static let checklistRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)([-*+]) \[([ xX])\] (.*)$"#
+        pattern: #"^([ \t]*)([-*+])\s+\[([ xX])\](?:\s+(.*))?$"#
     )
     private static let checklistToggleRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)([-*+]) \[([ xX])\](?: (.*))?$"#
+        pattern: #"^([ \t]*)([-*+])\s+\[([ xX])\](?:\s+(.*))?$"#
     )
     private static let checklistBracketRegex = try! NSRegularExpression(
         pattern: #"^([ \t]*[-*+]\s+)(\[([ xX])\])(?:\s|$)"#
     )
     private static let unorderedListRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)([-*+]) (.*)$"#
+        pattern: #"^([ \t]*)([-*+])[ \t]+(.*)$"#
     )
     private static let orderedListRegex = try! NSRegularExpression(
-        pattern: #"^([ \t]*)(\d+)\. (.*)$"#
+        pattern: #"^([ \t]*)(\d+)\.[ \t]+(.*)$"#
+    )
+    private static let romanListRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)([ivxlcdmIVXLCDM]+)\.[ \t]+(.*)$"#
+    )
+    private static let fenceDelimiterLineRegex = try! NSRegularExpression(
+        pattern: #"^\s*```.*$"#
     )
     private static let leadingWhitespaceRegex = try! NSRegularExpression(
         pattern: #"^([ \t]*)(.*)$"#
     )
+    private static let checklistLinePrefixRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)([-*+]\s+\[([ xX])\](?:\s|$))"#
+    )
+    private static let bulletLinePrefixRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)([-*+] )"#
+    )
+    private static let numberedLinePrefixRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)(\d+\. )"#
+    )
+    private static let romanLinePrefixRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)(([ivxlcdmIVXLCDM]+)\. )"#
+    )
+    private static let doubleHyphenLineRegex = try! NSRegularExpression(
+        pattern: #"^[ \t]*--$"#
+    )
+    private static let horizontalRuleLineRegex = try! NSRegularExpression(
+        pattern: #"^[ \t]*(?:---+|\*\*\*+|___+)[ \t]*$"#
+    )
+
+    // MARK: - Canonical Roman Numeral Helpers
+
+    private static let romanTable: [(value: Int, symbol: String)] = [
+        (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
+        (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
+        (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")
+    ]
+
+    /// Parses a canonical Roman numeral (`1...3999`), rejecting non-canonical strings like `"iiii"` or `"mix"` unless valid.
+    /// Also requires consistent casing (all lowercase or all uppercase) so mixed-case words are ignored.
+    public static func parseCanonicalRoman(_ token: String) -> (value: Int, uppercase: Bool)? {
+        guard !token.isEmpty, token.count <= 15 else { return nil }
+        let isUpper = token == token.uppercased()
+        let isLower = token == token.lowercased()
+        guard isUpper || isLower else { return nil }
+
+        let lower = token.lowercased()
+        var total = 0
+        var prevValue = 0
+        for ch in lower.reversed() {
+            let val: Int
+            switch ch {
+            case "i": val = 1
+            case "v": val = 5
+            case "x": val = 10
+            case "l": val = 50
+            case "c": val = 100
+            case "d": val = 500
+            case "m": val = 1000
+            default: return nil
+            }
+            if val < prevValue {
+                total -= val
+            } else {
+                total += val
+                prevValue = val
+            }
+        }
+        guard (1...3999).contains(total),
+              formatRoman(total, uppercase: false) == lower
+        else {
+            return nil
+        }
+        return (total, isUpper)
+    }
+
+    /// Formats `value` (`1...3999`) as a canonical Roman numeral string.
+    public static func formatRoman(_ value: Int, uppercase: Bool = false) -> String? {
+        guard (1...3999).contains(value) else { return nil }
+        var remaining = value
+        var out = ""
+        for entry in romanTable {
+            while remaining >= entry.value {
+                out.append(entry.symbol)
+                remaining -= entry.value
+            }
+        }
+        return uppercase ? out.uppercased() : out
+    }
+
+    private static func listPrefixBounds(in lineContent: String) -> (indentLen: Int, markerLen: Int)? {
+        if let m = firstMatch(checklistLinePrefixRegex, in: lineContent) {
+            return (m.range(at: 1).length, m.range(at: 2).length)
+        }
+        if let m = firstMatch(bulletLinePrefixRegex, in: lineContent) {
+            return (m.range(at: 1).length, m.range(at: 2).length)
+        }
+        if let m = firstMatch(numberedLinePrefixRegex, in: lineContent) {
+            return (m.range(at: 1).length, m.range(at: 2).length)
+        }
+        if let m = firstMatch(romanLinePrefixRegex, in: lineContent) {
+            let token = capture(3, in: lineContent, match: m)
+            if parseCanonicalRoman(token) != nil {
+                return (m.range(at: 1).length, m.range(at: 2).length)
+            }
+        }
+        return nil
+    }
 
     /// Continues or exits lists/checklists on Enter when the cursor is collapsed.
     public static func handleNewline(in text: String, selection: NSRange) -> EditResult? {
@@ -45,6 +148,23 @@ public enum MarkdownEditing {
             return nil
         }
         let lineContentEnd = contentEnd(ofLineRange: lineRange, in: nsText)
+        let fullLineContent = nsText.substring(
+            with: NSRange(location: lineRange.location, length: lineContentEnd - lineRange.location)
+        )
+
+        // Never split any list prefix (`- [ ] `, `- `, `1. `, `i. `) when pressing Enter at column 0
+        // or inside the prefix: push the intact list row down cleanly instead.
+        if let bounds = listPrefixBounds(in: fullLineContent) {
+            let textStart = lineRange.location + bounds.indentLen + bounds.markerLen
+            if selection.location < textStart {
+                return EditResult(
+                    replacementRange: NSRange(location: lineRange.location, length: 0),
+                    replacementText: "\n",
+                    newSelection: NSRange(location: lineRange.location, length: 0)
+                )
+            }
+        }
+
         let prefixRange = NSRange(location: lineRange.location, length: selection.location - lineRange.location)
         let prefix = nsText.substring(with: prefixRange)
         let restIsEmpty = selection.location >= lineContentEnd
@@ -114,6 +234,31 @@ public enum MarkdownEditing {
                 replacementText: insertion,
                 newSelection: NSRange(location: selection.location + (insertion as NSString).length, length: 0)
             )
+        }
+
+        if let match = firstMatch(romanListRegex, in: prefix) {
+            let indent = capture(1, in: prefix, match: match)
+            let romanStr = capture(2, in: prefix, match: match)
+            let itemText = capture(3, in: prefix, match: match)
+
+            if let parsed = parseCanonicalRoman(romanStr) {
+                if itemText.isEmpty && restIsEmpty {
+                    return EditResult(
+                        replacementRange: prefixRange,
+                        replacementText: "",
+                        newSelection: NSRange(location: lineRange.location, length: 0)
+                    )
+                }
+                guard let nextRoman = formatRoman(parsed.value + 1, uppercase: parsed.uppercase) else {
+                    return nil
+                }
+                let insertion = "\n\(indent)\(nextRoman). "
+                return EditResult(
+                    replacementRange: selection,
+                    replacementText: insertion,
+                    newSelection: NSRange(location: selection.location + (insertion as NSString).length, length: 0)
+                )
+            }
         }
 
         return nil
@@ -256,10 +401,235 @@ public enum MarkdownEditing {
 
         let state = capture(3, in: lineContent, match: match)
         let flipped = (state == " ") ? "[x]" : "[ ]"
+        let afterBracket = NSMaxRange(globalBracketRange)
+        let caretTarget: Int
+        if afterBracket < lineContentEnd, nsText.character(at: afterBracket) == 32 {
+            caretTarget = afterBracket + 1
+        } else {
+            caretTarget = afterBracket
+        }
         return EditResult(
             replacementRange: globalBracketRange,
             replacementText: flipped,
-            newSelection: NSRange(location: NSMaxRange(globalBracketRange), length: 0)
+            newSelection: NSRange(location: caretTarget, length: 0)
+        )
+    }
+
+    /// Expands `-- ` on an otherwise empty line into a Markdown horizontal divider (`---\n`).
+    public static func handleSpace(in text: String, selection: NSRange) -> EditResult? {
+        guard selection.length == 0 else { return nil }
+
+        let nsText = text as NSString
+        guard selection.location <= nsText.length else { return nil }
+
+        let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
+        let lineContentEnd = contentEnd(ofLineRange: lineRange, in: nsText)
+        guard selection.location == lineContentEnd else { return nil }
+
+        // Fast-path local check BEFORE scanning the document for code fences.
+        let contentRange = NSRange(location: lineRange.location, length: lineContentEnd - lineRange.location)
+        let lineContent = nsText.substring(with: contentRange)
+        guard firstMatch(doubleHyphenLineRegex, in: lineContent) != nil else { return nil }
+
+        if MarkdownStyler.isInsideFencedCodeBlock(before: lineRange.location, in: nsText) {
+            return nil
+        }
+
+        let replacement = "---\n"
+        return EditResult(
+            replacementRange: contentRange,
+            replacementText: replacement,
+            newSelection: NSRange(location: contentRange.location + (replacement as NSString).length, length: 0)
+        )
+    }
+
+    /// Atomically removes an entire checklist/list prefix or horizontal rule line on Backspace
+    /// so partial syntax fragments like `- [x` are never left behind.
+    public static func handleDeleteBackward(in text: String, selection: NSRange) -> EditResult? {
+        guard selection.length == 0 else { return nil }
+
+        let nsText = text as NSString
+        guard selection.location > 0, selection.location <= nsText.length else { return nil }
+
+        let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
+        let lineContentEnd = contentEnd(ofLineRange: lineRange, in: nsText)
+        let contentRange = NSRange(location: lineRange.location, length: lineContentEnd - lineRange.location)
+        let lineContent = nsText.substring(with: contentRange)
+
+        // Atomic deletion of any list prefix (`- [ ] `, `- `, `1. `, `i. `) when Backspace is pressed right after or inside it.
+        if let bounds = listPrefixBounds(in: lineContent) {
+            let markerStart = lineRange.location + bounds.indentLen
+            let markerEnd = markerStart + bounds.markerLen
+            if selection.location > markerStart, selection.location <= markerEnd {
+                if MarkdownStyler.isInsideFencedCodeBlock(before: lineRange.location, in: nsText) {
+                    return nil
+                }
+                return EditResult(
+                    replacementRange: NSRange(location: markerStart, length: bounds.markerLen),
+                    replacementText: "",
+                    newSelection: NSRange(location: markerStart, length: 0)
+                )
+            }
+        }
+
+        // Atomic deletion of a `---` horizontal rule line on Backspace.
+        if firstMatch(horizontalRuleLineRegex, in: lineContent) != nil,
+           selection.location > lineRange.location,
+           selection.location <= lineContentEnd
+        {
+            if MarkdownStyler.isInsideFencedCodeBlock(before: lineRange.location, in: nsText) {
+                return nil
+            }
+            return EditResult(
+                replacementRange: contentRange,
+                replacementText: "",
+                newSelection: NSRange(location: lineRange.location, length: 0)
+            )
+        }
+
+        return nil
+    }
+
+    /// Toggles bullet list (`- `) formatting on the current line or all selected lines (`⌘⇧8`).
+    public static func toggleBulletList(in text: String, selection: NSRange) -> EditResult {
+        toggleListStyle(in: text, selection: selection, numbered: false)
+    }
+
+    /// Toggles numbered list (`1. `, `2. `, …) formatting on the current line or all selected lines (`⌘⇧9`).
+    public static func toggleNumberedList(in text: String, selection: NSRange) -> EditResult {
+        toggleListStyle(in: text, selection: selection, numbered: true)
+    }
+
+    private static func toggleListStyle(in text: String, selection: NSRange, numbered: Bool) -> EditResult {
+        let nsText = text as NSString
+        let safeLoc = min(max(0, selection.location), nsText.length)
+        let safeLen = min(max(0, selection.length), nsText.length - safeLoc)
+        var effectiveRange = NSRange(location: safeLoc, length: safeLen)
+
+        if effectiveRange.length > 0, nsText.character(at: NSMaxRange(effectiveRange) - 1) == 10 {
+            effectiveRange.length -= 1
+        }
+
+        let blockRange = nsText.lineRange(for: effectiveRange)
+        let blockEnd = contentEnd(ofLineRange: blockRange, in: nsText)
+        let replaceRange = NSRange(location: blockRange.location, length: blockEnd - blockRange.location)
+        let blockText = nsText.substring(with: replaceRange)
+        let lines = blockText.components(separatedBy: "\n")
+
+        var inFence = MarkdownStyler.isInsideFencedCodeBlock(before: blockRange.location, in: nsText)
+        var fencedFlags: [Bool] = []
+        fencedFlags.reserveCapacity(lines.count)
+        for line in lines {
+            let isDelim = firstMatch(fenceDelimiterLineRegex, in: line) != nil
+            if isDelim {
+                fencedFlags.append(true)
+                inFence.toggle()
+            } else {
+                fencedFlags.append(inFence)
+            }
+        }
+
+        // Determine whether all eligible non-empty, non-fenced lines already have the target list style.
+        let eligibleIndices = lines.indices.filter { idx in
+            guard !fencedFlags[idx] else { return false }
+            return lines.count == 1 || !lines[idx].trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        let allAlreadyTarget = !eligibleIndices.isEmpty && eligibleIndices.allSatisfy { idx in
+            let line = lines[idx]
+            if numbered {
+                return firstMatch(numberedLinePrefixRegex, in: line) != nil
+            } else {
+                return firstMatch(checklistLinePrefixRegex, in: line) == nil
+                    && firstMatch(bulletLinePrefixRegex, in: line) != nil
+            }
+        }
+
+        // For numbered lists on a single line, continue from the previous line's number if present.
+        var nextNumber = 1
+        if numbered && !allAlreadyTarget && blockRange.location > 0 {
+            let prevLineRange = nsText.lineRange(for: NSRange(location: blockRange.location - 1, length: 0))
+            let prevEnd = contentEnd(ofLineRange: prevLineRange, in: nsText)
+            let prevLine = nsText.substring(
+                with: NSRange(location: prevLineRange.location, length: prevEnd - prevLineRange.location)
+            )
+            if let prevMatch = firstMatch(orderedListRegex, in: prevLine),
+               let prevNum = Int(capture(2, in: prevLine, match: prevMatch))
+            {
+                let (incremented, overflow) = prevNum.addingReportingOverflow(1)
+                if !overflow {
+                    nextNumber = incremented
+                }
+            }
+        }
+
+        var updatedLines: [String] = []
+        updatedLines.reserveCapacity(lines.count)
+        var firstDelta = 0
+        var totalDelta = 0
+
+        for (idx, line) in lines.enumerated() {
+            let isBlankInMulti = lines.count > 1 && line.trimmingCharacters(in: .whitespaces).isEmpty
+            let newLine: String
+            if fencedFlags[idx] || isBlankInMulti {
+                newLine = line
+            } else if allAlreadyTarget {
+                if let bounds = listPrefixBounds(in: line) {
+                    let nsLine = line as NSString
+                    let indent = nsLine.substring(to: bounds.indentLen)
+                    let body = nsLine.substring(from: bounds.indentLen + bounds.markerLen)
+                    newLine = indent + body
+                } else {
+                    newLine = line
+                }
+            } else {
+                let nsLine = line as NSString
+                let indent: String
+                let body: String
+                if let bounds = listPrefixBounds(in: line) {
+                    indent = nsLine.substring(to: bounds.indentLen)
+                    body = nsLine.substring(from: bounds.indentLen + bounds.markerLen)
+                } else if let wsMatch = firstMatch(leadingWhitespaceRegex, in: line) {
+                    indent = capture(1, in: line, match: wsMatch)
+                    body = capture(2, in: line, match: wsMatch)
+                } else {
+                    indent = ""
+                    body = line
+                }
+
+                if numbered {
+                    newLine = "\(indent)\(nextNumber). \(body)"
+                    let (inc, overflow) = nextNumber.addingReportingOverflow(1)
+                    if !overflow { nextNumber = inc }
+                } else {
+                    newLine = "\(indent)- \(body)"
+                }
+            }
+
+            let delta = (newLine as NSString).length - (line as NSString).length
+            if idx == 0 {
+                firstDelta = delta
+            }
+            totalDelta += delta
+            updatedLines.append(newLine)
+        }
+
+        let replacementText = updatedLines.joined(separator: "\n")
+        let replacementLen = (replacementText as NSString).length
+
+        let newLoc: Int
+        let newLen: Int
+        if safeLen == 0 {
+            newLoc = min(max(replaceRange.location, safeLoc + firstDelta), replaceRange.location + replacementLen)
+            newLen = 0
+        } else {
+            newLoc = replaceRange.location
+            newLen = replacementLen
+        }
+
+        return EditResult(
+            replacementRange: replaceRange,
+            replacementText: replacementText,
+            newSelection: NSRange(location: newLoc, length: newLen)
         )
     }
 

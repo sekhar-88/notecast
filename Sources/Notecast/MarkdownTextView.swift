@@ -19,7 +19,7 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
     private var pendingEditedRange: NSRange?
 
     private static let listLinePrefixRegex = try! NSRegularExpression(
-        pattern: #"^[ \t]*(?:[-*+]|\d+\.)\s"#
+        pattern: #"^[ \t]*(?:[-*+]|\d+\.|[ivxlcdmIVXLCDM]+\.)\s"#
     )
 
     init(
@@ -98,6 +98,11 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
         needsDisplay = true
     }
 
+    func applyCheckboxStyle(_ style: CheckboxStyle) {
+        (layoutManager as? MarkdownLayoutManager)?.checkboxStyle = style
+        needsDisplay = true
+    }
+
     private func restyleAll() {
         if let storage = textStorage {
             isApplyingStyling = true
@@ -105,6 +110,7 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
             isApplyingStyling = false
         }
         typingAttributes = styler.baseAttributes()
+        needsDisplay = true
     }
 
     // MARK: - NSTextStorageDelegate
@@ -124,14 +130,27 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
         }
     }
 
+    /// Returns the committed Markdown text (excluding any active provisional IME marked-text range).
+    var committedText: String {
+        guard hasMarkedText() else { return string }
+        let marked = markedRange()
+        let nsText = string as NSString
+        guard marked.location != NSNotFound,
+              marked.length > 0,
+              NSMaxRange(marked) <= nsText.length
+        else {
+            return string
+        }
+        return nsText.replacingCharacters(in: marked, with: "")
+    }
+
     override func didChangeText() {
         super.didChangeText()
         guard !isApplyingStyling else { return }
 
-        // Defer restyling while IME marked text is active so `setAttributes` does not wipe
-        // composition underlines; `pendingEditedRange` stays queued until composition commits.
+        // Defer restyling AND autosave while IME marked text is active so `setAttributes` does not wipe
+        // composition underlines and provisional preedit text is never persisted to disk.
         if hasMarkedText() {
-            onTextChanged?(string)
             return
         }
 
@@ -147,10 +166,32 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
         }
 
         typingAttributes = styler.baseAttributes()
+        needsDisplay = true
         onTextChanged?(string)
     }
 
-    // MARK: - Plain-Text Paste
+    // MARK: - Plain-Text Copy & Paste
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [.string]
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        let nsText = string as NSString
+        let pieces: [String] = selectedRanges.compactMap { value in
+            let range = value.rangeValue
+            guard range.location != NSNotFound,
+                  range.length > 0,
+                  NSMaxRange(range) <= nsText.length
+            else {
+                return nil
+            }
+            return nsText.substring(with: range)
+        }
+        guard !pieces.isEmpty else { return false }
+        pboard.declareTypes([.string], owner: nil)
+        return pboard.setString(pieces.joined(separator: "\n"), forType: .string)
+    }
 
     override func paste(_ sender: Any?) {
         pasteAsPlainText(sender)
@@ -158,15 +199,47 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
 
     // MARK: - Smart Editing & Checklist Clicks
 
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let plain: String? = (insertString as? String) ?? (insertString as? NSAttributedString)?.string
+        if plain == " ",
+           !hasMarkedText(),
+           selectedRanges.count == 1,
+           replacementRange.location == NSNotFound,
+           let result = MarkdownEditing.handleSpace(in: string, selection: selectedRange())
+        {
+            applyEditResult(result, actionName: "Insert Divider")
+            return
+        }
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+
     override func insertNewline(_ sender: Any?) {
-        if let result = MarkdownEditing.handleNewline(in: string, selection: selectedRange()) {
+        if !hasMarkedText(),
+           selectedRanges.count == 1,
+           let result = MarkdownEditing.handleNewline(in: string, selection: selectedRange())
+        {
             applyEditResult(result)
             return
         }
         super.insertNewline(sender)
     }
 
+    override func deleteBackward(_ sender: Any?) {
+        if !hasMarkedText(),
+           selectedRanges.count == 1,
+           let result = MarkdownEditing.handleDeleteBackward(in: string, selection: selectedRange())
+        {
+            applyEditResult(result, actionName: "Delete Markdown Prefix")
+            return
+        }
+        super.deleteBackward(sender)
+    }
+
     override func insertTab(_ sender: Any?) {
+        guard !hasMarkedText(), selectedRanges.count == 1 else {
+            super.insertTab(sender)
+            return
+        }
         let selection = selectedRange()
         if selection.length > 0 || isCursorOnListLine(selection) {
             if let result = MarkdownEditing.adjustIndentation(in: string, selection: selection, outdent: false) {
@@ -183,17 +256,38 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
     }
 
     override func insertBacktab(_ sender: Any?) {
+        guard !hasMarkedText(), selectedRanges.count == 1 else {
+            super.insertBacktab(sender)
+            return
+        }
         if let result = MarkdownEditing.adjustIndentation(in: string, selection: selectedRange(), outdent: true) {
             applyEditResult(result, actionName: "Outdent")
         }
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 1,
-           let layoutManager,
-           let textContainer
+        let viewPoint = convert(event.locationInWindow, from: nil)
+
+        // Intercept single or rapid multi-clicks anywhere on a drawn checkbox so clicking a checkbox
+        // never falls through to select trailing spaces or task text behind it.
+        if let mdLayoutManager = layoutManager as? MarkdownLayoutManager,
+           let markerRange = mdLayoutManager.checkboxMarkerRange(at: viewPoint, origin: textContainerOrigin)
         {
-            let viewPoint = convert(event.locationInWindow, from: nil)
+            window?.makeFirstResponder(self)
+            let bracketMidIndex = max(markerRange.location, NSMaxRange(markerRange) - 2)
+            if let result = MarkdownEditing.toggleCheckboxAtCharacterIndex(bracketMidIndex, in: string) {
+                applyEditResult(result, actionName: "Toggle Task")
+                return
+            }
+        }
+
+        if event.clickCount == 1,
+           event.modifierFlags.contains(.command),
+           let layoutManager,
+           let textContainer,
+           let storage = textStorage,
+           storage.length > 0
+        {
             let containerPoint = NSPoint(
                 x: viewPoint.x - textContainerOrigin.x,
                 y: viewPoint.y - textContainerOrigin.y
@@ -204,27 +298,21 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
                 in: textContainer,
                 fractionOfDistanceBetweenInsertionPoints: &fraction
             )
-            let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
-            let glyphRect = layoutManager.boundingRect(
-                forGlyphRange: NSRange(location: glyphIndex, length: 1),
-                in: textContainer
-            )
-            let hitRect = glyphRect.insetBy(dx: -4, dy: -2)
-            if hitRect.contains(containerPoint) {
-                if event.modifierFlags.contains(.command),
-                   let storage = textStorage,
-                   charIndex < storage.length,
+            if charIndex < storage.length {
+                let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
+                let glyphRect = layoutManager.boundingRect(
+                    forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                    in: textContainer
+                )
+                if glyphRect.insetBy(dx: -4, dy: -2).contains(containerPoint),
                    let url = storage.attribute(MarkdownStyler.linkURLAttribute, at: charIndex, effectiveRange: nil) as? URL
                 {
                     NSWorkspace.shared.open(url)
                     return
                 }
-                if let result = MarkdownEditing.toggleCheckboxAtCharacterIndex(charIndex, in: string) {
-                    applyEditResult(result, actionName: "Toggle Task")
-                    return
-                }
             }
         }
+
         super.mouseDown(with: event)
     }
 
@@ -325,7 +413,20 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
                 onFontSizeDelta?(1)
                 return true
             default:
-                break
+                if Int(event.keyCode) == kVK_ANSI_8 {
+                    applyEditResult(
+                        MarkdownEditing.toggleBulletList(in: string, selection: selectedRange()),
+                        actionName: "Bullet List"
+                    )
+                    return true
+                }
+                if Int(event.keyCode) == kVK_ANSI_9 {
+                    applyEditResult(
+                        MarkdownEditing.toggleNumberedList(in: string, selection: selectedRange()),
+                        actionName: "Numbered List"
+                    )
+                    return true
+                }
             }
         }
 

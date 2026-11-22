@@ -6,6 +6,8 @@ public final class MarkdownStyler {
     public static let codeBlockAttribute = NSAttributedString.Key("NotecastCodeBlock")
     public static let blockquoteAttribute = NSAttributedString.Key("NotecastBlockquote")
     public static let checkboxStateAttribute = NSAttributedString.Key("NotecastCheckboxState")
+    public static let bulletMarkerAttribute = NSAttributedString.Key("NotecastBulletMarker")
+    public static let horizontalRuleAttribute = NSAttributedString.Key("NotecastHorizontalRule")
     public static let linkURLAttribute = NSAttributedString.Key("NotecastLinkURL")
 
     public static let curatedFontFamilies: [(id: String, label: String)] = [
@@ -47,6 +49,9 @@ public final class MarkdownStyler {
     private let codeBlockParagraphStyle: NSParagraphStyle
     private var cachedBaseFont: NSFont?
     private var cachedMonoFont: NSFont?
+    private var cachedCheckboxSlotFont: NSFont?
+    private var cachedBulletSlotFont: NSFont?
+    private var cachedNumberMarkerFont: NSFont?
     private var cachedHeadingFonts: [Int: NSFont] = [:]
     private var cachedTraitFonts: [TraitFontKey: NSFont] = [:]
     private var cachedHangingIndentStyles: [Int: NSParagraphStyle] = [:]
@@ -56,12 +61,15 @@ public final class MarkdownStyler {
     private let headingRegex = try! NSRegularExpression(pattern: #"^(#{1,4})\s+(.+)$"#)
     private let blockquoteRegex = try! NSRegularExpression(pattern: #"^(\s*>\s?)(.*)$"#)
     private let fenceRegex = try! NSRegularExpression(pattern: #"^\s*```.*$"#)
+    private let horizontalRuleRegex = try! NSRegularExpression(pattern: #"^[ \t]*(?:---+|\*\*\*+|___+)[ \t]*$"#)
     private let checklistRegex = try! NSRegularExpression(pattern: #"^([ \t]*)([-*+]\s+\[([ xX])\])(?:\s+(.*))?$"#)
-    private let listRegex = try! NSRegularExpression(pattern: #"^([ \t]*)([-*+]|\d+\.)\s+(.*)$"#)
+    private let bulletListRegex = try! NSRegularExpression(pattern: #"^([ \t]*)([-*+])\s+(.*)$"#)
+    private let numberedListRegex = try! NSRegularExpression(pattern: #"^([ \t]*)(\d+\.)\s+(.*)$"#)
+    private let romanListRegex = try! NSRegularExpression(pattern: #"^([ \t]*)(([ivxlcdmIVXLCDM]+)\.)\s+(.*)$"#)
 
     private let inlineCodeRegex = try! NSRegularExpression(pattern: #"(`[^`\n]+`)"#)
-    private let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\((https?://[^\s)\n]+)\)"#)
-    private let bareURLRegex = try! NSRegularExpression(pattern: #"(?<![(\w])(https?://[^\s<>)\]`"'\n]+)"#)
+    private let markdownLinkRegex = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\((https?://(?:[^\s()\n]+|\([^\s()\n]*\))+)\)"#)
+    private let bareURLRegex = try! NSRegularExpression(pattern: #"(?<![(\w])(https?://[^\s<>\[\]`"'\n]+)"#)
     private let boldItalicRegex = try! NSRegularExpression(pattern: #"(\*\*\*[^*\n]+\*\*\*)"#)
     private let boldRegex = try! NSRegularExpression(pattern: #"(?<!\*)(\*\*[^*\n]+\*\*)(?!\*)|(?<!_)(__[^_\n]+__)(?!_)"#)
     private let italicRegex = try! NSRegularExpression(
@@ -94,10 +102,15 @@ public final class MarkdownStyler {
 
     /// Returns `true` if `location` falls inside an open triple-backtick fenced code block.
     public static func isInsideFencedCodeBlock(before location: Int, in nsString: NSString) -> Bool {
+        fencedCodeState(before: location, in: nsString).inFence
+    }
+
+    private static func fencedCodeState(before location: Int, in nsString: NSString) -> (inFence: Bool, openedBlockCount: Int) {
         let limit = min(max(0, location), nsString.length)
-        guard limit >= 3 else { return false }
+        guard limit >= 3 else { return (false, 0) }
 
         var inFence = false
+        var openedBlocks = 0
         var searchLoc = 0
         while searchLoc < limit {
             let hit = nsString.range(
@@ -124,6 +137,9 @@ public final class MarkdownStyler {
             }
 
             if onlyLeadingWhitespace {
+                if !inFence {
+                    openedBlocks += 1
+                }
                 inFence.toggle()
                 let lineRange = nsString.lineRange(for: NSRange(location: hit.location, length: 0))
                 searchLoc = min(limit, NSMaxRange(lineRange))
@@ -131,15 +147,45 @@ public final class MarkdownStyler {
                 searchLoc = NSMaxRange(hit)
             }
         }
-        return inFence
+        return (inFence, openedBlocks)
     }
 
     private func invalidateStyleCaches() {
         cachedBaseFont = nil
         cachedMonoFont = nil
+        cachedCheckboxSlotFont = nil
+        cachedBulletSlotFont = nil
+        cachedNumberMarkerFont = nil
         cachedHeadingFonts.removeAll(keepingCapacity: true)
         cachedTraitFonts.removeAll(keepingCapacity: true)
         cachedPrefixWidths.removeAll(keepingCapacity: true)
+    }
+
+    private func resolvedCheckboxSlotFont() -> NSFont {
+        if let cachedCheckboxSlotFont {
+            return cachedCheckboxSlotFont
+        }
+        let font = NSFont.monospacedSystemFont(ofSize: max(6.0, baseFontSize * 0.48), weight: .regular)
+        cachedCheckboxSlotFont = font
+        return font
+    }
+
+    private func resolvedBulletSlotFont() -> NSFont {
+        if let cachedBulletSlotFont {
+            return cachedBulletSlotFont
+        }
+        let font = NSFont.monospacedSystemFont(ofSize: max(10.0, baseFontSize * 0.90), weight: .regular)
+        cachedBulletSlotFont = font
+        return font
+    }
+
+    private func resolvedNumberMarkerFont() -> NSFont {
+        if let cachedNumberMarkerFont {
+            return cachedNumberMarkerFont
+        }
+        let font = NSFont.monospacedDigitSystemFont(ofSize: baseFontSize, weight: .medium)
+        cachedNumberMarkerFont = font
+        return font
     }
 
     private func resolvedBaseFont() -> NSFont {
@@ -289,13 +335,21 @@ public final class MarkdownStyler {
         let defaults = baseAttributes()
         let baseFont = resolvedBaseFont()
 
-        var inFence = Self.isInsideFencedCodeBlock(before: paragraphRange.location, in: nsString)
+        let entryState = Self.fencedCodeState(before: paragraphRange.location, in: nsString)
+        var inFence = entryState.inFence
+        var activeCodeBlockID = entryState.openedBlockCount
         let startEnd = NSMaxRange(paragraphRange)
-        let tailWasCodeBlock = (startEnd < totalLength)
-            && ((storage.attribute(Self.codeBlockAttribute, at: startEnd, effectiveRange: nil) as? Bool) == true)
 
-        // First scan lines in `paragraphRange` to detect whether fence parity changed,
-        // and extend through the rest of the document when opening/closing/deleting a fence.
+        // Check whether any part of `paragraphRange` previously carried a code-block attribute
+        // (catches deleting/editing a fence delimiter even beside another adjacent fence).
+        var hadCodeInParagraph = false
+        storage.enumerateAttribute(Self.codeBlockAttribute, in: paragraphRange, options: []) { value, _, stop in
+            if value != nil {
+                hadCodeInParagraph = true
+                stop.pointee = true
+            }
+        }
+
         var styleRange = paragraphRange
         var sawFenceDelimiter = false
         var scanFence = inFence
@@ -313,11 +367,8 @@ public final class MarkdownStyler {
         }
 
         if startEnd < totalLength {
-            let nextLineRange = nsString.lineRange(for: NSRange(location: startEnd, length: 0))
-            let nextContent = trimmedLineRange(nextLineRange, in: nsString)
-            let nextIsFence = nextContent.length > 0 && fenceRegex.firstMatch(in: text, range: nextContent) != nil
-            let tailParityMismatch = (scanFence != tailWasCodeBlock) && !nextIsFence
-            if sawFenceDelimiter || tailParityMismatch {
+            let tailWasCodeBlock = storage.attribute(Self.codeBlockAttribute, at: startEnd, effectiveRange: nil) != nil
+            if sawFenceDelimiter || hadCodeInParagraph || (scanFence != tailWasCodeBlock) {
                 styleRange = NSRange(location: paragraphRange.location, length: totalLength - paragraphRange.location)
             }
         }
@@ -334,14 +385,19 @@ public final class MarkdownStyler {
                 && fenceRegex.firstMatch(in: text, range: contentRange) != nil
 
             if isFenceDelimiter {
-                inFence.toggle()
+                if !inFence {
+                    activeCodeBlockID += 1
+                    inFence = true
+                } else {
+                    inFence = false
+                }
                 let mono = resolvedMonoFont()
                 storage.addAttributes(
                     [
                         .font: mono,
                         .foregroundColor: NSColor.tertiaryLabelColor,
                         .paragraphStyle: codeBlockParagraphStyle,
-                        Self.codeBlockAttribute: true
+                        Self.codeBlockAttribute: activeCodeBlockID
                     ],
                     range: fullLineRange
                 )
@@ -355,7 +411,7 @@ public final class MarkdownStyler {
                         .font: mono,
                         .foregroundColor: NSColor.labelColor,
                         .paragraphStyle: codeBlockParagraphStyle,
-                        Self.codeBlockAttribute: true
+                        Self.codeBlockAttribute: activeCodeBlockID
                     ],
                     range: fullLineRange
                 )
@@ -363,7 +419,7 @@ public final class MarkdownStyler {
                     nonInlineLineRanges.append(contentRange)
                 }
             } else if contentRange.length > 0 {
-                styleLine(
+                let skipInline = styleLine(
                     storage,
                     text: text,
                     nsString: nsString,
@@ -371,6 +427,9 @@ public final class MarkdownStyler {
                     lineRange: contentRange,
                     baseFont: baseFont
                 )
+                if skipInline {
+                    nonInlineLineRanges.append(contentRange)
+                }
             }
 
             let nextIndex = NSMaxRange(fullLineRange)
@@ -383,6 +442,7 @@ public final class MarkdownStyler {
 
     // MARK: - Line-Level Rules
 
+    @discardableResult
     private func styleLine(
         _ storage: NSTextStorage,
         text: String,
@@ -390,7 +450,18 @@ public final class MarkdownStyler {
         fullLineRange: NSRange,
         lineRange: NSRange,
         baseFont: NSFont
-    ) {
+    ) -> Bool {
+        if horizontalRuleRegex.firstMatch(in: text, range: lineRange) != nil {
+            storage.addAttributes(
+                [
+                    .foregroundColor: NSColor.clear,
+                    Self.horizontalRuleAttribute: true
+                ],
+                range: lineRange
+            )
+            return true
+        }
+
         if let match = headingRegex.firstMatch(in: text, range: lineRange) {
             let hashesRange = match.range(at: 1)
             let level = hashesRange.length
@@ -398,7 +469,7 @@ public final class MarkdownStyler {
 
             storage.addAttribute(.font, value: headingFont, range: lineRange)
             storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: hashesRange)
-            return
+            return false
         }
 
         if let match = blockquoteRegex.firstMatch(in: text, range: lineRange) {
@@ -423,10 +494,11 @@ public final class MarkdownStyler {
             }
             let prefixWidth = measuredPrefixWidth(nsString.substring(with: markerRange), font: baseFont)
             applyBlockquoteIndent(max(24, 12 + prefixWidth), to: storage, range: fullLineRange)
-            return
+            return false
         }
 
         if let match = checklistRegex.firstMatch(in: text, range: lineRange) {
+            let indentRange = match.range(at: 1)
             let markerRange = match.range(at: 2)
             let stateRange = match.range(at: 3)
             let bodyRange = match.range(at: 4)
@@ -434,32 +506,36 @@ public final class MarkdownStyler {
             let stateChar = nsString.substring(with: stateRange)
             let isChecked = (stateChar == "x" || stateChar == "X")
 
-            // Dim the bullet prefix and render a custom vector checkbox over `[ ]` / `[x]` in MarkdownLayoutManager,
-            // while preserving the exact literal characters for selection, editing, copy/paste, and hit-testing.
-            let bracketRange = NSRange(location: stateRange.location - 1, length: 3)
-            let bulletLen = max(0, bracketRange.location - markerRange.location)
-            if bulletLen > 0 {
+            // Use a compact fixed-width monospace slot for the entire `- [ ]` / `- [x]` prefix so
+            // checked and unchecked states have identical pixel width (zero horizontal jitter on toggle)
+            // while MarkdownLayoutManager draws a crisp circular/rounded checkbox cleanly inside the slot.
+            let slotFont = resolvedCheckboxSlotFont()
+            storage.addAttributes(
+                [
+                    .font: slotFont,
+                    .foregroundColor: NSColor.clear,
+                    Self.checkboxStateAttribute: isChecked ? 1 : 0
+                ],
+                range: markerRange
+            )
+
+            // Give comfortable breathing room between the drawn checkbox and the task text.
+            let spaceLoc = NSMaxRange(markerRange)
+            let extraKern: CGFloat = 3.0
+            if spaceLoc < NSMaxRange(lineRange) {
                 storage.addAttribute(
-                    .foregroundColor,
-                    value: NSColor.tertiaryLabelColor.withAlphaComponent(0.45),
-                    range: NSRange(location: markerRange.location, length: bulletLen)
-                )
-            }
-            if NSMaxRange(bracketRange) <= NSMaxRange(lineRange) {
-                storage.addAttributes(
-                    [
-                        .foregroundColor: NSColor.clear,
-                        Self.checkboxStateAttribute: isChecked ? 1 : 0
-                    ],
-                    range: bracketRange
+                    .kern,
+                    value: extraKern,
+                    range: NSRange(location: spaceLoc, length: 1)
                 )
             }
 
-            let prefixEnd = NSMaxRange(markerRange)
-            let prefixPlusSpaceLen = min(NSMaxRange(lineRange) - lineRange.location, (prefixEnd - lineRange.location) + 1)
-            let prefixRange = NSRange(location: lineRange.location, length: prefixPlusSpaceLen)
-            let prefixWidth = measuredPrefixWidth(nsString.substring(with: prefixRange), font: baseFont)
-            applyHangingIndent(max(20, prefixWidth), to: storage, range: lineRange)
+            let indentWidth = indentRange.length > 0
+                ? measuredPrefixWidth(nsString.substring(with: indentRange), font: baseFont)
+                : 0
+            let markerWidth = measuredPrefixWidth("- [ ]", font: slotFont)
+            let spaceWidth = measuredPrefixWidth(" ", font: baseFont) + extraKern
+            applyHangingIndent(max(22, indentWidth + markerWidth + spaceWidth), to: storage, range: lineRange)
 
             if isChecked, bodyRange.location != NSNotFound, bodyRange.length > 0 {
                 storage.addAttributes(
@@ -470,19 +546,100 @@ public final class MarkdownStyler {
                     range: bodyRange
                 )
             }
-            return
+            return false
         }
 
-        if let match = listRegex.firstMatch(in: text, range: lineRange) {
+        if let match = bulletListRegex.firstMatch(in: text, range: lineRange) {
+            let indentRange = match.range(at: 1)
             let markerRange = match.range(at: 2)
-            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: markerRange)
+            let slotFont = resolvedBulletSlotFont()
+            let depth = indentRange.length > 0 ? 1 : 0
 
-            let prefixEnd = min(NSMaxRange(lineRange), NSMaxRange(markerRange) + 1)
-            let prefixRange = NSRange(location: lineRange.location, length: prefixEnd - lineRange.location)
-            let prefixWidth = measuredPrefixWidth(nsString.substring(with: prefixRange), font: baseFont)
-            applyHangingIndent(max(16, prefixWidth), to: storage, range: lineRange)
-            return
+            storage.addAttributes(
+                [
+                    .font: slotFont,
+                    .foregroundColor: NSColor.clear,
+                    Self.bulletMarkerAttribute: depth
+                ],
+                range: markerRange
+            )
+
+            let spaceLoc = NSMaxRange(markerRange)
+            let extraKern: CGFloat = 3.5
+            if spaceLoc < NSMaxRange(lineRange) {
+                storage.addAttribute(.kern, value: extraKern, range: NSRange(location: spaceLoc, length: 1))
+            }
+
+            let indentWidth = indentRange.length > 0
+                ? measuredPrefixWidth(nsString.substring(with: indentRange), font: baseFont)
+                : 0
+            let markerWidth = measuredPrefixWidth("-", font: slotFont)
+            let spaceWidth = measuredPrefixWidth(" ", font: baseFont) + extraKern
+            applyHangingIndent(max(16, indentWidth + markerWidth + spaceWidth), to: storage, range: lineRange)
+            return false
         }
+
+        if let match = numberedListRegex.firstMatch(in: text, range: lineRange) {
+            let indentRange = match.range(at: 1)
+            let markerRange = match.range(at: 2)
+            let numFont = resolvedNumberMarkerFont()
+
+            storage.addAttributes(
+                [
+                    .font: numFont,
+                    .foregroundColor: accentColor.withAlphaComponent(0.92)
+                ],
+                range: markerRange
+            )
+
+            let spaceLoc = NSMaxRange(markerRange)
+            let extraKern: CGFloat = 2.5
+            if spaceLoc < NSMaxRange(lineRange) {
+                storage.addAttribute(.kern, value: extraKern, range: NSRange(location: spaceLoc, length: 1))
+            }
+
+            let indentWidth = indentRange.length > 0
+                ? measuredPrefixWidth(nsString.substring(with: indentRange), font: baseFont)
+                : 0
+            let markerWidth = measuredPrefixWidth(nsString.substring(with: markerRange), font: numFont)
+            let spaceWidth = measuredPrefixWidth(" ", font: baseFont) + extraKern
+            applyHangingIndent(max(20, indentWidth + markerWidth + spaceWidth), to: storage, range: lineRange)
+            return false
+        }
+
+        if let match = romanListRegex.firstMatch(in: text, range: lineRange) {
+            let tokenRange = match.range(at: 3)
+            let token = nsString.substring(with: tokenRange)
+            if MarkdownEditing.parseCanonicalRoman(token) != nil {
+                let indentRange = match.range(at: 1)
+                let markerRange = match.range(at: 2)
+                let markerFont = resolvedNumberMarkerFont()
+
+                storage.addAttributes(
+                    [
+                        .font: markerFont,
+                        .foregroundColor: accentColor.withAlphaComponent(0.92)
+                    ],
+                    range: markerRange
+                )
+
+                let spaceLoc = NSMaxRange(markerRange)
+                let extraKern: CGFloat = 2.5
+                if spaceLoc < NSMaxRange(lineRange) {
+                    storage.addAttribute(.kern, value: extraKern, range: NSRange(location: spaceLoc, length: 1))
+                }
+
+                let indentWidth = indentRange.length > 0
+                    ? measuredPrefixWidth(nsString.substring(with: indentRange), font: baseFont)
+                    : 0
+                let markerWidth = measuredPrefixWidth(nsString.substring(with: markerRange), font: markerFont)
+                let spaceWidth = measuredPrefixWidth(" ", font: baseFont) + extraKern
+                applyHangingIndent(max(20, indentWidth + markerWidth + spaceWidth), to: storage, range: lineRange)
+                return false
+            }
+        }
+
+        return false
     }
 
     // MARK: - Inline Rules
@@ -542,18 +699,34 @@ public final class MarkdownStyler {
             var urlRange = match.range(at: 1)
             guard !overlapsAny(urlRange, in: urlExcludedRanges) else { continue }
 
-            // Trim trailing sentence punctuation (e.g. `https://example.com.`)
+            // Trim trailing sentence punctuation and any unbalanced closing parentheses
+            // while keeping balanced parentheses such as `https://example.org/page_(topic)`.
             while urlRange.length > 0 {
                 let last = nsString.character(at: NSMaxRange(urlRange) - 1)
                 if last == 46 || last == 44 || last == 59 || last == 58 || last == 33 || last == 63 {
                     urlRange.length -= 1
+                } else if last == 41 { // ')'
+                    var opens = 0
+                    var closes = 0
+                    for offset in 0..<urlRange.length {
+                        let ch = nsString.character(at: urlRange.location + offset)
+                        if ch == 40 { opens += 1 }
+                        else if ch == 41 { closes += 1 }
+                    }
+                    if closes > opens {
+                        urlRange.length -= 1
+                    } else {
+                        break
+                    }
                 } else {
                     break
                 }
             }
-            guard urlRange.length > 8 else { continue }
             let urlString = nsString.substring(with: urlRange)
-            guard let url = URL(string: urlString) else { continue }
+            guard let url = URL(string: urlString),
+                  let host = url.host,
+                  !host.isEmpty
+            else { continue }
 
             storage.addAttributes(
                 [

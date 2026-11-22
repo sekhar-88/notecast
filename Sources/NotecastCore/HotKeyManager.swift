@@ -37,9 +37,11 @@ public final class HotKeyManager {
     /// Registers the primary toggle global hotkey, replacing any existing registration.
     @discardableResult
     public func register(_ combo: HotKeyCombo) -> OSStatus {
+        if let pref = activePreferencesCombo, pref == combo {
+            return OSStatus(eventHotKeyExistsErr)
+        }
         installHandlerIfNeeded()
         unregisterHotKeyOnly()
-        isSuspended = false
 
         var ref: EventHotKeyRef?
         let hotKeyID = EventHotKeyID(signature: notecastHotKeySignature, id: notecastHotKeyID)

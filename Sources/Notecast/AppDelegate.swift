@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private let hotKeyManager = HotKeyManager()
 
     private var activeNoteID: UUID!
+    private var isActiveNoteReadable = true
+    private var isEditorDirty = false
     private var panel: FloatingNotepadPanel!
     private var statusItem: NSStatusItem!
     private var settingsController: SettingsWindowController?
@@ -131,6 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             opacity: settings.windowOpacity,
             neonGlowEnabled: settings.neonGlowEnabled,
             neonAccent: settings.neonAccent,
+            uiAccent: settings.uiAccent,
+            checkboxStyle: settings.checkboxStyle,
             ghostOnUnfocus: settings.ghostOnUnfocus,
             ghostWakeZoneFraction: settings.ghostWakeZoneFraction,
             hotKeyHint: settings.hotKey.displayString
@@ -141,15 +145,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         activeNoteID = initialNote.id
         panel.updateNoteTitle(initialNote.title)
         if let loaded = try? noteLibrary.loadContentStrict(for: initialNote.id) {
+            isActiveNoteReadable = true
+            isEditorDirty = loaded.hasPendingEdits
+            panel.textView.isEditable = true
             panel.textView.loadInitialText(loaded.content)
             panel.updateSaveStatus(loaded.hasPendingEdits ? "Edited" : "Saved")
         } else {
+            isActiveNoteReadable = false
+            isEditorDirty = false
+            panel.textView.isEditable = false
             panel.textView.loadInitialText("")
             panel.updateSaveStatus("Read failed")
         }
 
         panel.textView.onTextChanged = { [weak self] updatedText in
-            guard let self, let noteID = self.activeNoteID else { return }
+            guard let self, self.isActiveNoteReadable, let noteID = self.activeNoteID else { return }
+            self.isEditorDirty = true
             self.panel.updateSaveStatus("Edited")
             let liveTitle = NoteLibraryStore.extractTitle(from: updatedText)
             self.panel.updateNoteTitle(liveTitle)
@@ -160,7 +171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 onSaved: { [weak self] savedMeta in
                     DispatchQueue.main.async {
                         guard let self, self.activeNoteID == savedMeta.id else { return }
-                        self.panel.updateSaveStatus("Saved")
+                        if self.panel.textView.committedText == updatedText {
+                            self.isEditorDirty = false
+                            self.panel.updateSaveStatus("Saved")
+                        }
                         self.panel.updateNoteTitle(savedMeta.title)
                     }
                 },
@@ -489,6 +503,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             previousApp = frontmost
         }
 
+        // If the active note is clean (no local unsaved edits), pick up any external `.md` changes on disk.
+        if isActiveNoteReadable, !isEditorDirty, let activeNoteID,
+           let refreshed = try? noteLibrary.loadContentStrict(for: activeNoteID),
+           refreshed.content != panel.textView.string
+        {
+            panel.updateNoteTitle(NoteLibraryStore.extractTitle(from: refreshed.content))
+            panel.textView.loadInitialText(refreshed.content)
+            panel.updateSaveStatus(refreshed.hasPendingEdits ? "Edited" : "Saved")
+        }
+
         let clampedFrame = resolvedPanelFrame(preferCurrentFrame: true)
         panel.setFrame(clampedFrame, display: false)
         panel.setGhosted(false, animated: true)
@@ -501,7 +525,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private func hidePanel() {
         settings.savedWindowFrame = panel.frame
         let saved = flushActiveNoteSync()
-        panel.updateSaveStatus(saved ? "Saved" : "Save failed")
+        if isActiveNoteReadable {
+            panel.updateSaveStatus(saved ? "Saved" : "Save failed")
+        }
         panel.orderOut(nil)
         panel.setGhosted(false, animated: false)
 
@@ -516,12 +542,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @discardableResult
     private func flushActiveNoteSync() -> Bool {
-        guard let activeNoteID else { return true }
         do {
-            try noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.string)
+            if isActiveNoteReadable, isEditorDirty, let activeNoteID {
+                try noteLibrary.flushSync(noteID: activeNoteID, content: panel.textView.committedText)
+                isEditorDirty = false
+            } else {
+                // Flush any other pending notes or deferred index updates without overwriting
+                // a clean (possibly externally edited) or unreadable active note.
+                try noteLibrary.flushSync()
+            }
             return true
         } catch {
-            panel.updateSaveStatus("Save failed")
+            if isActiveNoteReadable {
+                panel.updateSaveStatus("Save failed")
+            }
             return false
         }
     }
@@ -532,6 +566,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let loaded = try noteLibrary.loadContentStrict(for: id)
             noteLibrary.setLastOpenedNote(id)
             activeNoteID = id
+            isActiveNoteReadable = true
+            isEditorDirty = loaded.hasPendingEdits
+            panel.textView.isEditable = true
 
             let title = NoteLibraryStore.extractTitle(from: loaded.content)
             panel.updateNoteTitle(title)
@@ -549,6 +586,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         do {
             let created = try noteLibrary.createNote(initialContent: "")
             activeNoteID = created.id
+            isActiveNoteReadable = true
+            isEditorDirty = false
+            panel.textView.isEditable = true
             panel.updateNoteTitle(created.title)
             panel.updateSaveStatus("Saved")
             panel.textView.loadInitialText("")
@@ -571,9 +611,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 activeNoteID = nextNote.id
                 panel.updateNoteTitle(nextNote.title)
                 if let loaded {
+                    isActiveNoteReadable = true
+                    isEditorDirty = loaded.hasPendingEdits
+                    panel.textView.isEditable = true
                     panel.updateSaveStatus(loaded.hasPendingEdits ? "Edited" : "Saved")
                     panel.textView.loadInitialText(loaded.content)
                 } else {
+                    isActiveNoteReadable = false
+                    isEditorDirty = false
+                    panel.textView.isEditable = false
                     panel.updateSaveStatus("Read failed")
                     panel.textView.loadInitialText("")
                 }
@@ -678,6 +724,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settingsController?.refreshFromSettings()
     }
 
+    private func updateUIAccent(_ accent: UIAccent) {
+        settings.uiAccent = accent
+        panel.applyUIAccent(accent)
+        settingsController?.refreshFromSettings()
+    }
+
+    private func updateCheckboxStyle(_ style: CheckboxStyle) {
+        settings.checkboxStyle = style
+        panel.applyCheckboxStyle(style)
+        settingsController?.refreshFromSettings()
+    }
+
     private func updateFontFamily(_ family: String) {
         settings.fontFamily = family
         panel.applyFont(family: settings.fontFamily, size: settings.fontSize)
@@ -703,8 +761,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func updateGhostOnUnfocus(_ enabled: Bool) {
+        let wasGhosted = panel.isGhosted
         settings.ghostOnUnfocus = enabled
         panel.applyGhostOnUnfocus(enabled)
+        if !enabled && wasGhosted {
+            let clamped = resolvedPanelFrame(preferCurrentFrame: true)
+            if clamped != panel.frame {
+                panel.setFrame(clamped, display: true, animate: true)
+                settings.savedWindowFrame = clamped
+            }
+        }
         settingsController?.refreshFromSettings()
     }
 
@@ -909,6 +975,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             controller.onNeonAccentChanged = { [weak self] accent in
                 self?.updateNeonAccent(accent)
+            }
+            controller.onUIAccentChanged = { [weak self] accent in
+                self?.updateUIAccent(accent)
+            }
+            controller.onCheckboxStyleChanged = { [weak self] style in
+                self?.updateCheckboxStyle(style)
             }
             controller.onFontFamilyChanged = { [weak self] family in
                 self?.updateFontFamily(family)

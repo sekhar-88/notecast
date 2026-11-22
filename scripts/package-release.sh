@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="v0.4.0"
+VERSION="v0.4.1"
 BUILD_FLAGS=()
 
 if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -16,10 +16,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 ARCH="$(uname -m)"
+BUNDLE_VERSION="${VERSION#v}"
 if [[ ${#BUILD_FLAGS[@]} -gt 0 ]]; then
-    "$ROOT_DIR/scripts/build-app.sh" "${BUILD_FLAGS[@]}"
+    APP_VERSION="$BUNDLE_VERSION" "$ROOT_DIR/scripts/build-app.sh" "${BUILD_FLAGS[@]}"
 else
-    "$ROOT_DIR/scripts/build-app.sh"
+    APP_VERSION="$BUNDLE_VERSION" "$ROOT_DIR/scripts/build-app.sh"
 fi
 
 APP_BUNDLE="$ROOT_DIR/build/Notecast.app"

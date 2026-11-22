@@ -53,6 +53,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
     }
 
     private static let maxCachedNoteBodies = 24
+    private static let maxSavedCacheBytes = 16 * 1024 * 1024
     private static let maxSearchCacheBytes = 8 * 1024 * 1024
     private static let maxRetryAttempts = 3
     private static let retryDelay: TimeInterval = 2.0
@@ -61,8 +62,10 @@ public final class NoteLibraryStore: @unchecked Sendable {
     private var indexDirty = false
     private var indexWriteFailed = false
     private var lastSavedByID: [UUID: CachedBody] = [:]
+    private var lastSavedCacheBytes = 0
     private var lastSavedAccessOrder: [UUID] = []
-    private var searchSessionCache: [UUID: String] = [:]
+    private var searchSessionCache: [UUID: CachedBody] = [:]
+    private var searchSessionAccessOrder: [UUID] = []
     private var searchSessionCacheBytes = 0
     private var pendingByID: [UUID: String] = [:]
     private var pendingWorkItem: DispatchWorkItem?
@@ -257,44 +260,73 @@ public final class NoteLibraryStore: @unchecked Sendable {
         }
     }
 
-    /// Deletes a note by ID. If the deleted note was inactive, preserves the current active note;
-    /// otherwise selects the most recent survivor (or creates an empty fallback note if none remain).
+    /// Deletes a note by ID atomically with rollback if updating `index.json` or fallback creation fails.
+    /// If the deleted note was inactive, preserves the current active note; otherwise selects the most recent survivor.
     @discardableResult
     public func deleteNote(id: UUID) throws -> NoteMetadata {
         try ioQueue.sync {
-            pendingByID.removeValue(forKey: id)
-            if pendingByID.isEmpty {
-                pendingWorkItem?.cancel()
-                pendingWorkItem = nil
-                retryAttempts = 0
-            } else {
-                try flushPendingOnQueue(writeIndexImmediately: true)
+            // Flush other pending notes first without discarding `id`'s pending buffer yet.
+            for otherID in Array(pendingByID.keys) where otherID != id {
+                guard let content = pendingByID[otherID] else { continue }
+                _ = try persistNoteOnQueue(id: otherID, content: content, writeIndexImmediately: true)
+                pendingByID.removeValue(forKey: otherID)
             }
 
+            let fm = FileManager.default
             let fileURL = noteFileURL(for: id)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                try FileManager.default.removeItem(at: fileURL)
-            }
-            evictCachedNoteOnQueue(id)
-            removeFromSearchCacheOnQueue(id)
-            index.notes.removeAll { $0.id == id }
-
-            let nextNote: NoteMetadata
-            if let currentActiveID = index.lastOpenedNoteID,
-               currentActiveID != id,
-               let activeSurvivor = index.notes.first(where: { $0.id == currentActiveID })
-            {
-                nextNote = activeSurvivor
-                try writeIndexAtomicallyOnQueue()
-            } else if let candidate = sortedNotes(index.notes).first {
-                nextNote = candidate
-                index.lastOpenedNoteID = candidate.id
-                try writeIndexAtomicallyOnQueue()
-            } else {
-                nextNote = try createNoteOnQueue(initialContent: "")
+            let stagedURL = directoryURL.appendingPathComponent(".deleting-\(id.uuidString).md", isDirectory: false)
+            var didStageFile = false
+            if fm.fileExists(atPath: fileURL.path) {
+                try? fm.removeItem(at: stagedURL)
+                try fm.moveItem(at: fileURL, to: stagedURL)
+                didStageFile = true
             }
 
-            return nextNote
+            let previousIndex = index
+            let previousIndexDirty = indexDirty
+            let previousIndexWriteFailed = indexWriteFailed
+
+            do {
+                index.notes.removeAll { $0.id == id }
+
+                let nextNote: NoteMetadata
+                if let currentActiveID = index.lastOpenedNoteID,
+                   currentActiveID != id,
+                   let activeSurvivor = index.notes.first(where: { $0.id == currentActiveID })
+                {
+                    nextNote = activeSurvivor
+                    try writeIndexAtomicallyOnQueue()
+                } else if let candidate = sortedNotes(index.notes).first {
+                    nextNote = candidate
+                    index.lastOpenedNoteID = candidate.id
+                    try writeIndexAtomicallyOnQueue()
+                } else {
+                    nextNote = try createNoteOnQueue(initialContent: "")
+                }
+
+                // Commit: delete staged file and clear caches/pending for deleted note.
+                if didStageFile {
+                    try? fm.removeItem(at: stagedURL)
+                }
+                pendingByID.removeValue(forKey: id)
+                if pendingByID.isEmpty {
+                    pendingWorkItem?.cancel()
+                    pendingWorkItem = nil
+                    retryAttempts = 0
+                }
+                evictCachedNoteOnQueue(id)
+                removeFromSearchCacheOnQueue(id)
+                return nextNote
+            } catch {
+                // Roll back in-memory index and restore the staged `.md` file on failure.
+                index = previousIndex
+                indexDirty = previousIndexDirty
+                indexWriteFailed = previousIndexWriteFailed
+                if didStageFile {
+                    try? fm.moveItem(at: stagedURL, to: fileURL)
+                }
+                throw error
+            }
         }
     }
 
@@ -357,6 +389,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
     public func clearSearchCache() {
         ioQueue.async { [weak self] in
             self?.searchSessionCache.removeAll(keepingCapacity: false)
+            self?.searchSessionAccessOrder.removeAll(keepingCapacity: false)
             self?.searchSessionCacheBytes = 0
         }
     }
@@ -388,16 +421,26 @@ public final class NoteLibraryStore: @unchecked Sendable {
                 let body: String
                 if let pending = pendingByID[note.id] {
                     body = pending
-                } else if let cached = lastSavedByID[note.id] {
-                    body = cached.content
-                } else if let sessionCached = searchSessionCache[note.id] {
-                    body = sessionCached
-                } else if let data = try? Data(contentsOf: noteFileURL(for: note.id)) {
-                    let loaded = String(decoding: data, as: UTF8.self)
-                    storeInSearchCacheOnQueue(loaded, for: note.id)
-                    body = loaded
                 } else {
-                    body = ""
+                    let url = noteFileURL(for: note.id)
+                    let diskRevision = fileRevisionOnQueue(for: url)
+                    if let cached = lastSavedByID[note.id],
+                       let diskRevision,
+                       cached.revision == diskRevision
+                    {
+                        body = cached.content
+                    } else if let sessionCached = searchSessionCache[note.id],
+                              let diskRevision,
+                              sessionCached.revision == diskRevision
+                    {
+                        body = sessionCached.content
+                    } else if let data = try? Data(contentsOf: url) {
+                        let loaded = String(decoding: data, as: UTF8.self)
+                        storeInSearchCacheOnQueue(loaded, revision: diskRevision, for: note.id)
+                        body = loaded
+                    } else {
+                        body = ""
+                    }
                 }
 
                 let bodyMatchesAll = tokens.allSatisfy { body.localizedCaseInsensitiveContains($0) }
@@ -479,29 +522,43 @@ public final class NoteLibraryStore: @unchecked Sendable {
     }
 
     private func cacheSavedContentOnQueue(_ content: String, revision: FileRevision?, for id: UUID) {
+        if let existing = lastSavedByID[id] {
+            lastSavedCacheBytes = max(0, lastSavedCacheBytes - existing.content.utf8.count)
+        }
         lastSavedByID[id] = CachedBody(content: content, revision: revision)
+        lastSavedCacheBytes += content.utf8.count
         removeFromSearchCacheOnQueue(id)
         touchCachedNoteOnQueue(id)
         trimSavedCacheIfNeededOnQueue()
     }
 
-    private func storeInSearchCacheOnQueue(_ content: String, for id: UUID) {
+    private func storeInSearchCacheOnQueue(_ content: String, revision: FileRevision?, for id: UUID) {
         let byteCount = content.utf8.count
         guard byteCount <= Self.maxSearchCacheBytes else { return }
-        if searchSessionCacheBytes + byteCount > Self.maxSearchCacheBytes {
-            searchSessionCache.removeAll(keepingCapacity: true)
-            searchSessionCacheBytes = 0
+
+        if let existing = searchSessionCache.removeValue(forKey: id) {
+            searchSessionCacheBytes = max(0, searchSessionCacheBytes - existing.content.utf8.count)
+            searchSessionAccessOrder.removeAll { $0 == id }
         }
-        if let existing = searchSessionCache[id] {
-            searchSessionCacheBytes = max(0, searchSessionCacheBytes - existing.utf8.count)
+
+        while searchSessionCacheBytes + byteCount > Self.maxSearchCacheBytes,
+              let oldestID = searchSessionAccessOrder.first
+        {
+            searchSessionAccessOrder.removeFirst()
+            if let evicted = searchSessionCache.removeValue(forKey: oldestID) {
+                searchSessionCacheBytes = max(0, searchSessionCacheBytes - evicted.content.utf8.count)
+            }
         }
-        searchSessionCache[id] = content
+
+        searchSessionCache[id] = CachedBody(content: content, revision: revision)
+        searchSessionAccessOrder.append(id)
         searchSessionCacheBytes += byteCount
     }
 
     private func removeFromSearchCacheOnQueue(_ id: UUID) {
         if let existing = searchSessionCache.removeValue(forKey: id) {
-            searchSessionCacheBytes = max(0, searchSessionCacheBytes - existing.utf8.count)
+            searchSessionCacheBytes = max(0, searchSessionCacheBytes - existing.content.utf8.count)
+            searchSessionAccessOrder.removeAll { $0 == id }
         }
     }
 
@@ -537,19 +594,23 @@ public final class NoteLibraryStore: @unchecked Sendable {
     }
 
     private func evictCachedNoteOnQueue(_ id: UUID) {
-        lastSavedByID.removeValue(forKey: id)
+        if let existing = lastSavedByID.removeValue(forKey: id) {
+            lastSavedCacheBytes = max(0, lastSavedCacheBytes - existing.content.utf8.count)
+        }
         lastSavedAccessOrder.removeAll { $0 == id }
     }
 
     private func trimSavedCacheIfNeededOnQueue() {
-        while lastSavedByID.count > Self.maxCachedNoteBodies {
+        while lastSavedByID.count > Self.maxCachedNoteBodies || lastSavedCacheBytes > Self.maxSavedCacheBytes {
             guard let evictIdx = lastSavedAccessOrder.firstIndex(where: { candidate in
                 candidate != index.lastOpenedNoteID && pendingByID[candidate] == nil
             }) else {
                 break
             }
             let evictedID = lastSavedAccessOrder.remove(at: evictIdx)
-            lastSavedByID.removeValue(forKey: evictedID)
+            if let evicted = lastSavedByID.removeValue(forKey: evictedID) {
+                lastSavedCacheBytes = max(0, lastSavedCacheBytes - evicted.content.utf8.count)
+            }
         }
     }
 

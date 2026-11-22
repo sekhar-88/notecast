@@ -379,9 +379,9 @@ final class VioletGuideWindowController: NSWindowController, NSWindowDelegate {
         let markdownSection = makeBulletSection(
             heading: "Markdown & Smart Editing",
             items: [
-                "# Headings (# to ####), > quotes, and ``` fenced blocks style live as you type.",
-                "Inline formatting: **bold** (⌘B), *italic* (⌘I), `code` (⌘E), and ~~strikethrough~~ (⌘⇧X).",
-                "Checklists & lists: ⌘⇧L or ⌘↩ toggles tasks, clicking [ ] flips checkboxes, Enter continues or exits lists, and Tab / ⇧Tab indents or outdents.",
+                "# Headings (# to ####), > quotes, ``` fenced code cards, and -- + Space horizontal dividers style live as you type.",
+                "Inline formatting: **bold** (⌘B), *italic* (⌘I), `code` (⌘E), ~~strikethrough~~ (⌘⇧X), and ⌘-click links.",
+                "Lists & tasks: ⌘⇧8 bullets (- ), ⌘⇧9 numbered (1. ), Roman numerals (i. ii. iii. iv.), ⌘⇧L or ⌘↩ checkboxes, and Tab / ⇧Tab indent.",
                 "Paste (⌘V) always strips rich formatting to keep scratchpad notes clean plain text."
             ]
         )
