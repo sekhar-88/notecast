@@ -241,6 +241,41 @@ struct MarkdownEditingTests {
         #expect(outdent != nil)
         #expect(apply(outdent!, to: indented) == text)
     }
+
+    @Test("Return after Int.max ordered-list marker falls back safely instead of overflowing")
+    func orderedListOverflowSafe() {
+        let maxText = "\(Int.max). item"
+        let edit = MarkdownEditing.handleNewline(
+            in: maxText,
+            selection: NSRange(location: (maxText as NSString).length, length: 0)
+        )
+        #expect(edit == nil)
+
+        let hugeText = "999999999999999999999999999. item"
+        let hugeEdit = MarkdownEditing.handleNewline(
+            in: hugeText,
+            selection: NSRange(location: (hugeText as NSString).length, length: 0)
+        )
+        #expect(hugeEdit == nil)
+    }
+
+    @Test("Smart list continuation is suppressed inside fenced code blocks")
+    func smartListSuppressedInCodeFence() {
+        let fenced = "```bash\n- item"
+        let edit = MarkdownEditing.handleNewline(
+            in: fenced,
+            selection: NSRange(location: (fenced as NSString).length, length: 0)
+        )
+        #expect(edit == nil)
+
+        let afterFence = "```bash\n- inside\n```\n- outside"
+        let outsideEdit = MarkdownEditing.handleNewline(
+            in: afterFence,
+            selection: NSRange(location: (afterFence as NSString).length, length: 0)
+        )
+        #expect(outsideEdit != nil)
+        #expect(apply(outsideEdit!, to: afterFence) == afterFence + "\n- ")
+    }
 }
 
 @Suite("MarkdownStyler")
@@ -359,6 +394,84 @@ struct MarkdownStylerTests {
         let tailIdx = max(0, storage.length - 5)
         let tailFont = storage.attribute(.font, at: tailIdx, effectiveRange: nil) as? NSFont
         #expect(tailFont?.pointSize == 14)
+    }
+
+    @Test("Splitting a styled heading paragraph resets formatting on the moved suffix")
+    func splitHeadingResetsSuffixStyling() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let storage = NSTextStorage(string: "# Heading")
+        styler.styleAll(storage)
+
+        // Simulate pressing Return between "Head" and "ing" -> "# Head\ning"
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: 6, length: 0), with: "\n")
+        styler.style(storage, in: NSRange(location: 6, length: 1))
+        storage.endEditing()
+
+        let headFont = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        let suffixFont = storage.attribute(.font, at: 7, effectiveRange: nil) as? NSFont
+        #expect((headFont?.pointSize ?? 0) > 14)
+        #expect(suffixFont?.pointSize == 14)
+    }
+
+    @Test("Fenced code blocks style body lines as code and suppress heading/inline rules")
+    func fencedCodeBlockBodyStyling() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let text = "```swift\n# Not a heading\n**not bold**\n```\n# Real Heading"
+        let storage = NSTextStorage(string: text)
+        styler.styleAll(storage)
+
+        let nsText = text as NSString
+        let insideHashIdx = nsText.range(of: "Not a heading").location
+        let insideBoldIdx = nsText.range(of: "not bold").location
+        let outsideHeadingIdx = nsText.range(of: "Real Heading").location
+
+        let insideFont = storage.attribute(.font, at: insideHashIdx, effectiveRange: nil) as? NSFont
+        let insideCodeAttr = storage.attribute(MarkdownStyler.codeBlockAttribute, at: insideHashIdx, effectiveRange: nil) as? Bool
+        let insideBoldFont = storage.attribute(.font, at: insideBoldIdx, effectiveRange: nil) as? NSFont
+        let outsideFont = storage.attribute(.font, at: outsideHeadingIdx, effectiveRange: nil) as? NSFont
+        let outsideCodeAttr = storage.attribute(MarkdownStyler.codeBlockAttribute, at: outsideHeadingIdx, effectiveRange: nil) as? Bool
+
+        #expect(insideCodeAttr == true)
+        #expect(insideFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
+        #expect(insideBoldFont?.fontDescriptor.symbolicTraits.contains(.bold) == false)
+        #expect((outsideFont?.pointSize ?? 0) > 14)
+        #expect(outsideCodeAttr == nil)
+
+        // Deleting the opening fence restyles the former code body incrementally
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: 0, length: 9), with: "plain\n")
+        styler.style(storage, in: NSRange(location: 0, length: 6))
+        storage.endEditing()
+
+        let updatedText = storage.string as NSString
+        let promotedHeadingIdx = updatedText.range(of: "Not a heading").location
+        let promotedFont = storage.attribute(.font, at: promotedHeadingIdx, effectiveRange: nil) as? NSFont
+        #expect((promotedFont?.pointSize ?? 0) > 14)
+    }
+
+    @Test("Blockquotes, checkboxes, and Cmd-click links attach custom rendering attributes")
+    func blockquoteCheckboxAndLinkAttributes() {
+        let styler = MarkdownStyler(baseFontSize: 14)
+        let text = "> Quote line\n- [ ] Open\n- [x] Done\nVisit [Notecast](https://notecast.app) or https://example.org/docs. and `https://ignored.dev`"
+        let storage = NSTextStorage(string: text)
+        styler.styleAll(storage)
+
+        let nsText = text as NSString
+        let quoteIdx = nsText.range(of: "Quote").location
+        #expect(storage.attribute(MarkdownStyler.blockquoteAttribute, at: quoteIdx, effectiveRange: nil) as? Bool == true)
+
+        let uncheckedBracketIdx = nsText.range(of: "[ ]").location
+        let checkedBracketIdx = nsText.range(of: "[x]").location
+        #expect(storage.attribute(MarkdownStyler.checkboxStateAttribute, at: uncheckedBracketIdx, effectiveRange: nil) as? Int == 0)
+        #expect(storage.attribute(MarkdownStyler.checkboxStateAttribute, at: checkedBracketIdx, effectiveRange: nil) as? Int == 1)
+
+        let mdLinkIdx = nsText.range(of: "Notecast").location
+        let bareLinkIdx = nsText.range(of: "example.org").location
+        let codeLinkIdx = nsText.range(of: "ignored.dev").location
+        #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: mdLinkIdx, effectiveRange: nil) as? URL)?.absoluteString == "https://notecast.app")
+        #expect((storage.attribute(MarkdownStyler.linkURLAttribute, at: bareLinkIdx, effectiveRange: nil) as? URL)?.absoluteString == "https://example.org/docs")
+        #expect(storage.attribute(MarkdownStyler.linkURLAttribute, at: codeLinkIdx, effectiveRange: nil) == nil)
     }
 }
 
@@ -670,6 +783,111 @@ struct NoteLibraryStoreTests {
         try reloaded.flushSync(noteID: active.id, content: activeContent)
         let activeAfter = reloaded.allNotes().first { $0.id == active.id }
         #expect(activeAfter?.updatedAt == activeUpdatedBefore)
+    }
+
+    @Test("Deleting an inactive note preserves the current active note and never overwrites a third note")
+    func deleteInactiveNotePreservesActive() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+
+        let noteA = try store.createNote(initialContent: "# Note A\nOlder active text")
+        let noteB = try store.createNote(initialContent: "# Note B\nNewer untouched text")
+        let noteC = try store.createNote(initialContent: "# Note C\nTo be deleted")
+
+        // Make A the active note even though B is newer
+        store.setLastOpenedNote(noteA.id)
+        #expect(store.lastOpenedNote().id == noteA.id)
+
+        // Delete inactive C: active note MUST remain A (not jump to B)
+        let survivor = try store.deleteNote(id: noteC.id)
+        #expect(survivor.id == noteA.id)
+        #expect(store.lastOpenedNote().id == noteA.id)
+
+        // Flushing A's text must leave B's on-disk file intact
+        try store.flushSync(noteID: survivor.id, content: "# Note A\nOlder active text edited")
+        let bURL = notesDir.appendingPathComponent("\(noteB.id.uuidString).md")
+        #expect(try String(contentsOf: bURL, encoding: .utf8) == "# Note B\nNewer untouched text")
+    }
+
+    @Test("loadContentStrict throws on unreadable files and detects external edits on disk")
+    func strictLoadAndExternalEditDetection() throws {
+        let dir = try makeTempDir()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        let note = try store.createNote(initialContent: "# Original\nInitial body")
+        let fileURL = notesDir.appendingPathComponent("\(note.id.uuidString).md")
+
+        // Prime cache
+        let initial = try store.loadContentStrict(for: note.id)
+        #expect(initial.content == "# Original\nInitial body")
+        #expect(!initial.hasPendingEdits)
+
+        // Simulate external atomic edit on disk
+        try Data("# External Edit\nUpdated outside app".utf8).write(to: fileURL, options: [.atomic])
+        let refreshed = try store.loadContentStrict(for: note.id)
+        #expect(refreshed.content == "# External Edit\nUpdated outside app")
+
+        // On a fresh store (cache miss), an unreadable file must throw instead of silently returning ""
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+        let freshStore = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        #expect(throws: (any Error).self) {
+            _ = try freshStore.loadContentStrict(for: note.id)
+        }
+    }
+
+    @Test("Manifest-only index.json write failure is reported and retried on flushSync")
+    func manifestOnlyWriteFailureRetried() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let notesDir = dir.appendingPathComponent("notes", isDirectory: true)
+        let indexURL = notesDir.appendingPathComponent("index.json")
+        let store = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        let note = try store.createNote(initialContent: "# Old Title\nBody")
+
+        // Replace index.json with a non-empty directory so .md writes succeed while index.json atomic rename fails
+        try FileManager.default.removeItem(at: indexURL)
+        try FileManager.default.createDirectory(at: indexURL, withIntermediateDirectories: true)
+        try Data("blocker".utf8).write(to: indexURL.appendingPathComponent("lock"))
+
+        let newText = "# New Title\nBody"
+        let gotError: Bool = await withCheckedContinuation { continuation in
+            store.scheduleSave(
+                noteID: note.id,
+                content: newText,
+                delay: 0.03,
+                onSaved: { _ in continuation.resume(returning: false) },
+                onError: { _ in continuation.resume(returning: true) }
+            )
+        }
+        #expect(gotError)
+        #expect(store.hasPendingChanges())
+
+        // Remove blocking directory and verify flushSync persists the updated index.json
+        try FileManager.default.removeItem(at: indexURL)
+        try store.flushSync()
+        #expect(!store.hasPendingChanges())
+
+        let reloaded = NoteLibraryStore(directoryURL: notesDir, legacyScratchpadURL: nil, useStarterIfEmpty: false)
+        #expect(reloaded.allNotes().first(where: { $0.id == note.id })?.title == "New Title")
+    }
+
+    @Test("extractTitle stops after the first non-empty line")
+    func extractTitleOnly() {
+        let doc = "\n\n# **Quick** Title\n" + String(repeating: "\n", count: 5_000)
+        #expect(NoteLibraryStore.extractTitle(from: doc) == "Quick Title")
+        #expect(NoteLibraryStore.extractTitle(from: "   \n\n") == "Untitled Note")
     }
 }
 

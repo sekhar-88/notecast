@@ -62,6 +62,7 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
 
         drawsBackground = false
         insertionPointColor = styler.accentColor
+        (layoutManager as? MarkdownLayoutManager)?.accentColor = styler.accentColor
         textContainerInset = NSSize(width: 16, height: 12)
 
         font = MarkdownStyler.resolveFont(family: styler.fontFamily, size: styler.baseFontSize)
@@ -92,7 +93,9 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
     func applyAccentColor(_ color: NSColor) {
         styler.accentColor = color
         insertionPointColor = color
+        (layoutManager as? MarkdownLayoutManager)?.accentColor = color
         restyleAll()
+        needsDisplay = true
     }
 
     private func restyleAll() {
@@ -124,6 +127,13 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
     override func didChangeText() {
         super.didChangeText()
         guard !isApplyingStyling else { return }
+
+        // Defer restyling while IME marked text is active so `setAttributes` does not wipe
+        // composition underlines; `pendingEditedRange` stays queued until composition commits.
+        if hasMarkedText() {
+            onTextChanged?(string)
+            return
+        }
 
         let rangeToStyle = pendingEditedRange ?? selectedRange()
         pendingEditedRange = nil
@@ -200,11 +210,19 @@ final class MarkdownTextView: NSTextView, @MainActor NSTextStorageDelegate {
                 in: textContainer
             )
             let hitRect = glyphRect.insetBy(dx: -4, dy: -2)
-            if hitRect.contains(containerPoint),
-               let result = MarkdownEditing.toggleCheckboxAtCharacterIndex(charIndex, in: string)
-            {
-                applyEditResult(result, actionName: "Toggle Task")
-                return
+            if hitRect.contains(containerPoint) {
+                if event.modifierFlags.contains(.command),
+                   let storage = textStorage,
+                   charIndex < storage.length,
+                   let url = storage.attribute(MarkdownStyler.linkURLAttribute, at: charIndex, effectiveRange: nil) as? URL
+                {
+                    NSWorkspace.shared.open(url)
+                    return
+                }
+                if let result = MarkdownEditing.toggleCheckboxAtCharacterIndex(charIndex, in: string) {
+                    applyEditResult(result, actionName: "Toggle Task")
+                    return
+                }
             }
         }
         super.mouseDown(with: event)

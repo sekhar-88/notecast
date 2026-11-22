@@ -44,6 +44,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         flushActiveNoteSync()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if panel != nil {
+            settings.savedWindowFrame = panel.frame
+        }
+        let flushed = flushActiveNoteSync()
+        if !flushed || noteLibrary.hasPendingChanges() {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Unable to Save Notes"
+            alert.informativeText = "Notecast could not write your latest edits to disk. Keep Notecast open to retry or copy your text, or quit anyway."
+            alert.addButton(withTitle: "Keep Open")
+            alert.addButton(withTitle: "Quit Anyway")
+            NSApp.activate()
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                return .terminateCancel
+            }
+        }
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
@@ -52,7 +73,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if panel != nil {
             settings.savedWindowFrame = panel.frame
         }
-        flushActiveNoteSync()
         hotKeyManager.teardown()
     }
 
@@ -120,12 +140,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let initialNote = noteLibrary.lastOpenedNote()
         activeNoteID = initialNote.id
         panel.updateNoteTitle(initialNote.title)
-        panel.textView.loadInitialText(noteLibrary.loadContent(for: initialNote.id))
+        if let loaded = try? noteLibrary.loadContentStrict(for: initialNote.id) {
+            panel.textView.loadInitialText(loaded.content)
+            panel.updateSaveStatus(loaded.hasPendingEdits ? "Edited" : "Saved")
+        } else {
+            panel.textView.loadInitialText("")
+            panel.updateSaveStatus("Read failed")
+        }
 
         panel.textView.onTextChanged = { [weak self] updatedText in
             guard let self, let noteID = self.activeNoteID else { return }
             self.panel.updateSaveStatus("Edited")
-            let liveTitle = NoteLibraryStore.extractTitleAndPreview(from: updatedText).title
+            let liveTitle = NoteLibraryStore.extractTitle(from: updatedText)
             self.panel.updateNoteTitle(liveTitle)
 
             self.noteLibrary.scheduleSave(
@@ -502,15 +528,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private func openNote(id: UUID) {
         flushActiveNoteSync()
-        noteLibrary.setLastOpenedNote(id)
-        activeNoteID = id
+        do {
+            let loaded = try noteLibrary.loadContentStrict(for: id)
+            noteLibrary.setLastOpenedNote(id)
+            activeNoteID = id
 
-        let content = noteLibrary.loadContent(for: id)
-        let title = NoteLibraryStore.extractTitleAndPreview(from: content).title
-        panel.updateNoteTitle(title)
-        panel.updateSaveStatus("Saved")
-        panel.textView.loadInitialText(content)
-        panel.dismissOverlaysAndFocusEditor()
+            let title = NoteLibraryStore.extractTitle(from: loaded.content)
+            panel.updateNoteTitle(title)
+            panel.updateSaveStatus(loaded.hasPendingEdits ? "Edited" : "Saved")
+            panel.textView.loadInitialText(loaded.content)
+            panel.dismissOverlaysAndFocusEditor()
+        } catch {
+            panel.updateSaveStatus("Read failed")
+            NSSound.beep()
+        }
     }
 
     private func createNewNote() {
@@ -528,19 +559,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     private func deleteNote(id: UUID) {
-        if id != activeNoteID {
+        let wasActive = (id == activeNoteID)
+        if !wasActive {
             flushActiveNoteSync()
         }
         do {
             let nextNote = try noteLibrary.deleteNote(id: id)
-            let wasActive = (id == activeNoteID)
-            activeNoteID = nextNote.id
 
             if wasActive {
-                let content = noteLibrary.loadContent(for: nextNote.id)
+                let loaded = try? noteLibrary.loadContentStrict(for: nextNote.id)
+                activeNoteID = nextNote.id
                 panel.updateNoteTitle(nextNote.title)
-                panel.updateSaveStatus("Saved")
-                panel.textView.loadInitialText(content)
+                if let loaded {
+                    panel.updateSaveStatus(loaded.hasPendingEdits ? "Edited" : "Saved")
+                    panel.textView.loadInitialText(loaded.content)
+                } else {
+                    panel.updateSaveStatus("Read failed")
+                    panel.textView.loadInitialText("")
+                }
             }
 
             if panel.isNotesListVisible {

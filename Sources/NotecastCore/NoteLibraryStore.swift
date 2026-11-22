@@ -41,15 +41,29 @@ public final class NoteLibraryStore: @unchecked Sendable {
     private let useStarterIfEmpty: Bool
     private let ioQueue = DispatchQueue(label: "com.notecast.notelibrary", qos: .utility)
 
+    private struct FileRevision: Equatable {
+        let inode: UInt64?
+        let modificationDate: Date?
+        let fileSize: UInt64?
+    }
+
+    private struct CachedBody {
+        let content: String
+        let revision: FileRevision?
+    }
+
     private static let maxCachedNoteBodies = 24
+    private static let maxSearchCacheBytes = 8 * 1024 * 1024
     private static let maxRetryAttempts = 3
     private static let retryDelay: TimeInterval = 2.0
 
     private var index = IndexFile(notes: [], lastOpenedNoteID: nil)
     private var indexDirty = false
-    private var lastSavedByID: [UUID: String] = [:]
+    private var indexWriteFailed = false
+    private var lastSavedByID: [UUID: CachedBody] = [:]
     private var lastSavedAccessOrder: [UUID] = []
     private var searchSessionCache: [UUID: String] = [:]
+    private var searchSessionCacheBytes = 0
     private var pendingByID: [UUID: String] = [:]
     private var pendingWorkItem: DispatchWorkItem?
     private var retryAttempts = 0
@@ -84,7 +98,26 @@ public final class NoteLibraryStore: @unchecked Sendable {
         }
     }
 
-    /// Extracts a clean title and 1-line preview from Markdown content in O(1) time.
+    /// Extracts only the clean title from the first non-empty Markdown line (stops immediately after line 1).
+    public static func extractTitle(from content: String) -> String {
+        var rawTitle: String?
+
+        content.enumerateLines { line, stop in
+            let trimmedLeading = line.drop(while: \.isWhitespace)
+            guard !trimmedLeading.isEmpty else { return }
+
+            let snippet = cappedLineSnippet(trimmedLeading, maxUTF16Units: 400)
+            let cleaned = cleanMarkdownLine(snippet)
+            guard !cleaned.isEmpty else { return }
+
+            rawTitle = cleaned
+            stop = true
+        }
+
+        return (rawTitle?.isEmpty == false) ? truncate(rawTitle!, maxLength: 80) : "Untitled Note"
+    }
+
+    /// Extracts a clean title and 1-line preview from Markdown content, stopping once 2 non-empty lines are found.
     public static func extractTitleAndPreview(from content: String) -> (title: String, preview: String) {
         var rawTitle: String?
         var rawPreview: String?
@@ -161,22 +194,46 @@ public final class NoteLibraryStore: @unchecked Sendable {
     }
 
     /// Loads the UTF-8 content for `id`, preferring any unsaved pending buffer.
-    public func loadContent(for id: UUID) -> String {
-        ioQueue.sync {
+    /// Returns `""` only if the note file does not yet exist; throws on unreadable file I/O errors.
+    public func loadContentStrict(for id: UUID) throws -> (content: String, hasPendingEdits: Bool) {
+        try ioQueue.sync {
             if let pending = pendingByID[id] {
-                return pending
-            }
-            if let cached = lastSavedByID[id] {
-                touchCachedNoteOnQueue(id)
-                return cached
+                return (pending, true)
             }
             let url = noteFileURL(for: id)
-            guard let data = try? Data(contentsOf: url) else {
-                return ""
+            let diskRevision = fileRevisionOnQueue(for: url)
+            if let cached = lastSavedByID[id],
+               let diskRevision,
+               cached.revision == diskRevision
+            {
+                touchCachedNoteOnQueue(id)
+                return (cached.content, false)
             }
-            let text = String(decoding: data, as: UTF8.self)
-            cacheSavedContentOnQueue(text, for: id)
-            return text
+
+            do {
+                let data = try Data(contentsOf: url)
+                let text = String(decoding: data, as: UTF8.self)
+                cacheSavedContentOnQueue(text, revision: diskRevision, for: id)
+                return (text, false)
+            } catch {
+                if isFileNotFoundError(error) {
+                    evictCachedNoteOnQueue(id)
+                    return ("", false)
+                }
+                throw error
+            }
+        }
+    }
+
+    /// Loads the UTF-8 content for `id`, preferring any unsaved pending buffer (returns `""` if missing/unreadable).
+    public func loadContent(for id: UUID) -> String {
+        (try? loadContentStrict(for: id).content) ?? ""
+    }
+
+    /// Returns `true` when unsaved note buffers or unpersisted index updates remain in memory.
+    public func hasPendingChanges() -> Bool {
+        ioQueue.sync {
+            !pendingByID.isEmpty || indexDirty || indexWriteFailed
         }
     }
 
@@ -200,7 +257,8 @@ public final class NoteLibraryStore: @unchecked Sendable {
         }
     }
 
-    /// Deletes a note by ID and returns the next active note (creating an empty fallback note if none remain).
+    /// Deletes a note by ID. If the deleted note was inactive, preserves the current active note;
+    /// otherwise selects the most recent survivor (or creates an empty fallback note if none remain).
     @discardableResult
     public func deleteNote(id: UUID) throws -> NoteMetadata {
         try ioQueue.sync {
@@ -218,11 +276,17 @@ public final class NoteLibraryStore: @unchecked Sendable {
                 try FileManager.default.removeItem(at: fileURL)
             }
             evictCachedNoteOnQueue(id)
-            searchSessionCache.removeValue(forKey: id)
+            removeFromSearchCacheOnQueue(id)
             index.notes.removeAll { $0.id == id }
 
             let nextNote: NoteMetadata
-            if let candidate = sortedNotes(index.notes).first {
+            if let currentActiveID = index.lastOpenedNoteID,
+               currentActiveID != id,
+               let activeSurvivor = index.notes.first(where: { $0.id == currentActiveID })
+            {
+                nextNote = activeSurvivor
+                try writeIndexAtomicallyOnQueue()
+            } else if let candidate = sortedNotes(index.notes).first {
                 nextNote = candidate
                 index.lastOpenedNoteID = candidate.id
                 try writeIndexAtomicallyOnQueue()
@@ -283,7 +347,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
 
             try flushPendingOnQueue(writeIndexImmediately: true)
 
-            if indexDirty {
+            if indexDirty || indexWriteFailed {
                 try writeIndexAtomicallyOnQueue()
             }
         }
@@ -293,6 +357,7 @@ public final class NoteLibraryStore: @unchecked Sendable {
     public func clearSearchCache() {
         ioQueue.async { [weak self] in
             self?.searchSessionCache.removeAll(keepingCapacity: false)
+            self?.searchSessionCacheBytes = 0
         }
     }
 
@@ -324,12 +389,12 @@ public final class NoteLibraryStore: @unchecked Sendable {
                 if let pending = pendingByID[note.id] {
                     body = pending
                 } else if let cached = lastSavedByID[note.id] {
-                    body = cached
+                    body = cached.content
                 } else if let sessionCached = searchSessionCache[note.id] {
                     body = sessionCached
                 } else if let data = try? Data(contentsOf: noteFileURL(for: note.id)) {
                     let loaded = String(decoding: data, as: UTF8.self)
-                    searchSessionCache[note.id] = loaded
+                    storeInSearchCacheOnQueue(loaded, for: note.id)
                     body = loaded
                 } else {
                     body = ""
@@ -413,11 +478,55 @@ public final class NoteLibraryStore: @unchecked Sendable {
         ioQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
-    private func cacheSavedContentOnQueue(_ content: String, for id: UUID) {
-        lastSavedByID[id] = content
-        searchSessionCache.removeValue(forKey: id)
+    private func cacheSavedContentOnQueue(_ content: String, revision: FileRevision?, for id: UUID) {
+        lastSavedByID[id] = CachedBody(content: content, revision: revision)
+        removeFromSearchCacheOnQueue(id)
         touchCachedNoteOnQueue(id)
         trimSavedCacheIfNeededOnQueue()
+    }
+
+    private func storeInSearchCacheOnQueue(_ content: String, for id: UUID) {
+        let byteCount = content.utf8.count
+        guard byteCount <= Self.maxSearchCacheBytes else { return }
+        if searchSessionCacheBytes + byteCount > Self.maxSearchCacheBytes {
+            searchSessionCache.removeAll(keepingCapacity: true)
+            searchSessionCacheBytes = 0
+        }
+        if let existing = searchSessionCache[id] {
+            searchSessionCacheBytes = max(0, searchSessionCacheBytes - existing.utf8.count)
+        }
+        searchSessionCache[id] = content
+        searchSessionCacheBytes += byteCount
+    }
+
+    private func removeFromSearchCacheOnQueue(_ id: UUID) {
+        if let existing = searchSessionCache.removeValue(forKey: id) {
+            searchSessionCacheBytes = max(0, searchSessionCacheBytes - existing.utf8.count)
+        }
+    }
+
+    private func fileRevisionOnQueue(for url: URL) -> FileRevision? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return nil
+        }
+        let inode = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value
+        let mtime = attrs[.modificationDate] as? Date
+        let size = (attrs[.size] as? NSNumber)?.uint64Value
+        return FileRevision(inode: inode, modificationDate: mtime, fileSize: size)
+    }
+
+    private func isFileNotFoundError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError {
+            return true
+        }
+        if nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOENT) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return underlying.domain == NSPOSIXErrorDomain && underlying.code == Int(ENOENT)
+        }
+        return false
     }
 
     private func touchCachedNoteOnQueue(_ id: UUID) {
@@ -494,14 +603,21 @@ public final class NoteLibraryStore: @unchecked Sendable {
         }
 
         // Refresh metadata for known notes if their .md file was modified more recently than index.json
-        // (for example, if a prior session terminated between an atomic .md write and an index flush).
+        // (for example, if a prior session terminated between an atomic .md write and an index flush,
+        // or the file was edited externally).
+        let indexFileMtime = (try? indexURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         for idx in index.notes.indices {
             let note = index.notes[idx]
             guard let fileURL = mdByID[note.id],
                   let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]),
-                  let mtime = values.contentModificationDate,
-                  mtime.timeIntervalSince(note.updatedAt) > 1.5
+                  let mtime = values.contentModificationDate
             else {
+                continue
+            }
+
+            let newerThanIndexFile = indexFileMtime.map { mtime > $0 } ?? true
+            let newerThanRecordedDate = mtime.timeIntervalSince(note.updatedAt) > 1.5
+            guard newerThanIndexFile || newerThanRecordedDate else {
                 continue
             }
 
@@ -560,10 +676,11 @@ public final class NoteLibraryStore: @unchecked Sendable {
         )
 
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        try Data(initialContent.utf8).write(to: noteFileURL(for: id), options: [.atomic])
+        let fileURL = noteFileURL(for: id)
+        try Data(initialContent.utf8).write(to: fileURL, options: [.atomic])
         index.notes.insert(meta, at: 0)
         index.lastOpenedNoteID = id
-        cacheSavedContentOnQueue(initialContent, for: id)
+        cacheSavedContentOnQueue(initialContent, revision: fileRevisionOnQueue(for: fileURL), for: id)
         try writeIndexAtomicallyOnQueue()
         return meta
     }
@@ -597,11 +714,15 @@ public final class NoteLibraryStore: @unchecked Sendable {
         let extracted = Self.extractTitleAndPreview(from: content)
         let now = Date()
 
-        let alreadySaved = lastSavedByID[id] == content
+        let fileURL = noteFileURL(for: id)
+        let currentDiskRevision = fileRevisionOnQueue(for: fileURL)
+        let alreadySaved = lastSavedByID[id].map {
+            $0.content == content && currentDiskRevision != nil && $0.revision == currentDiskRevision
+        } ?? false
         if !alreadySaved {
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-            try Data(content.utf8).write(to: noteFileURL(for: id), options: [.atomic])
-            cacheSavedContentOnQueue(content, for: id)
+            try Data(content.utf8).write(to: fileURL, options: [.atomic])
+            cacheSavedContentOnQueue(content, revision: fileRevisionOnQueue(for: fileURL), for: id)
         }
 
         if let idx = index.notes.firstIndex(where: { $0.id == id }) {
@@ -615,10 +736,12 @@ public final class NoteLibraryStore: @unchecked Sendable {
                     meta.updatedAt = now
                 }
                 index.notes[idx] = meta
-                if writeIndexImmediately || titleOrPreviewChanged {
+                indexDirty = true
+            }
+
+            if writeIndexImmediately || titleOrPreviewChanged || indexWriteFailed {
+                if indexDirty || indexWriteFailed {
                     try writeIndexAtomicallyOnQueue()
-                } else {
-                    indexDirty = true
                 }
             }
             return meta
@@ -632,16 +755,24 @@ public final class NoteLibraryStore: @unchecked Sendable {
             )
             index.notes.insert(meta, at: 0)
             index.lastOpenedNoteID = id
+            indexDirty = true
             try writeIndexAtomicallyOnQueue()
             return meta
         }
     }
 
     private func writeIndexAtomicallyOnQueue() throws {
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        let data = try makeEncoder().encode(index)
-        try data.write(to: indexURL, options: [.atomic])
-        indexDirty = false
+        indexDirty = true
+        do {
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            let data = try makeEncoder().encode(index)
+            try data.write(to: indexURL, options: [.atomic])
+            indexDirty = false
+            indexWriteFailed = false
+        } catch {
+            indexWriteFailed = true
+            throw error
+        }
     }
 
     private func noteFileURL(for id: UUID) -> URL {

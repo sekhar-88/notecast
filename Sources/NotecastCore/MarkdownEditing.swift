@@ -41,6 +41,9 @@ public enum MarkdownEditing {
         guard selection.location <= nsText.length else { return nil }
 
         let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
+        if MarkdownStyler.isInsideFencedCodeBlock(before: lineRange.location, in: nsText) {
+            return nil
+        }
         let lineContentEnd = contentEnd(ofLineRange: lineRange, in: nsText)
         let prefixRange = NSRange(location: lineRange.location, length: selection.location - lineRange.location)
         let prefix = nsText.substring(with: prefixRange)
@@ -98,7 +101,13 @@ public enum MarkdownEditing {
                     newSelection: NSRange(location: lineRange.location, length: 0)
                 )
             }
-            let nextNumber = (Int(numberStr) ?? 0) + 1
+            guard let currentNumber = Int(numberStr) else {
+                return nil
+            }
+            let (nextNumber, overflow) = currentNumber.addingReportingOverflow(1)
+            guard !overflow else {
+                return nil
+            }
             let insertion = "\n\(indent)\(nextNumber). "
             return EditResult(
                 replacementRange: selection,
