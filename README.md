@@ -82,3 +82,9 @@ Notes are stored as individual UTF-8 Markdown files (`<uuid>.md`) alongside a li
 ```text
 ~/Library/Application Support/Notecast/notes/
 ```
+
+## License
+
+Copyright © 2026 Chandrasekhar Sahoo. All rights reserved.
+
+You may download and run the official release builds for personal use. Copying, modifying, redistributing, or using the source code or binaries commercially without explicit permission is not permitted.

@@ -1423,7 +1423,8 @@ private final class NeonGlowOverlayView: NSView {
         innerGlowPath.addRect(outerRect)
         innerGlowPath.addPath(CGPath(roundedRect: bounds, cornerWidth: panelCornerRadius, cornerHeight: panelCornerRadius, transform: nil))
         innerGlowLayer.path = innerGlowPath
-        innerGlowLayer.shadowPath = innerGlowPath
+        // Intentionally omit `innerGlowLayer.shadowPath`: CALayer.shadowPath uses non-zero winding
+        // and ignores `fillRule = .evenOdd`, which would fill the entire editor interior with shadow.
 
         let r = bounds.insetBy(dx: 1.0, dy: 1.0)
         let cr = max(2, panelCornerRadius - 1.0)

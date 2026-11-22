@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="v0.3.6"
+VERSION="v0.3.7"
 BUILD_FLAGS=()
 
 if [[ $# -gt 0 && "$1" != -* ]]; then
